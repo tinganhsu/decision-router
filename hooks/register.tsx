@@ -824,6 +824,7 @@ export const register: Register = (on, options) => {
           ['cap', `${(await read($, capAtom)) ?? cfg.defaultCap}${(await read($, pendingAtom)) ? '   🔓 next prompt: overrides set' : ''}`],
           ['preset', (await read($, presetAtom)) ?? (PRESETS[String(options.preset)] ? String(options.preset) : 'custom')],
           ['limits', `ceiling ${(await read($, ceilingAtom)) ?? cfg.ceiling} (break at ${cfg.ceilingBreak})   floor ${(await read($, floorAtom)) ?? cfg.floor}`],
+          ['bars', `up ${cfg.minUpgradeConfidence ? `≥ ${cfg.minUpgradeConfidence}` : 'off'}   down ${cfg.minDowngradeConfidence ? `≥ ${cfg.minDowngradeConfidence}` : 'off'}   (confidence to switch to a stronger / cheaper model)`],
           ['last', last ? `${last.alias} / ${last.effort}  ${gauge(last.confidence)} ${last.confidence.toFixed(2)}${last.kept ? `  kept (wanted ${last.kept})` : ''}${last.held ? `  held (wanted ${last.held})` : ''}${last.capped ? `  capped from ${last.capped}` : ''}${last.clamped ? `  clamped from ${last.clamped}` : ''}` : 'none yet'],
           ...usageRows(totals?.models ?? {}, cfg.pool),
           ['saved', savingsLine(totals ?? (await tally($, cfg)))],

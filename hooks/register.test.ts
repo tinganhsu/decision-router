@@ -758,3 +758,19 @@ test('gate is pure: same model, no current model or a current model outside the 
   expect(gate(pick('opus', 0.1), 'claude-haiku-5-5', cfg).alias).toBe('opus') // haiku is not allowed, so there is nothing to hold on
   expect(gate(pick('opus', 0.1), 'claude-sonnet-5-5', cfg)).toMatchObject({ alias: 'sonnet', held: 'opus' })
 })
+
+test('/jev status shows the confidence bars for spending more and less', { options: { apiKey: 'k-test', minUpgradeConfidence: 0.3, minDowngradeConfidence: 0.6 } }, async ($, on) => {
+  mock.store(on)
+  world(on, jev('opus', 'high'))
+  const text = JSON.stringify(await $.command.run({ command: 'jev', args: 'status' } as any))
+  expect(text).toContain('up ≥ 0.3')
+  expect(text).toContain('down ≥ 0.6')
+})
+
+test('/jev status says the confidence bars are off at their default of 0', OPTS, async ($, on) => {
+  mock.store(on)
+  world(on, jev('opus', 'high'))
+  const text = JSON.stringify(await $.command.run({ command: 'jev', args: 'status' } as any))
+  expect(text).toContain('up off')
+  expect(text).toContain('down off')
+})
