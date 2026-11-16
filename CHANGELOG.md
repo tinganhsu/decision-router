@@ -3,6 +3,11 @@
 All notable changes to jev-router are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] - 2026-11-16
+
+### Added
+- `/jev status` has a `bars` row with the two confidence bars (`up ≥ 0.3   down ≥ 0.6`, or `off` at 0).
+
 ## [0.5.1] - 2026-11-16
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "jev-router",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Asks TypeSafe Jev before each task which Claude model and effort fit best, then runs the turn on it",
   "types": "./types/index.d.ts",
   "author": { "name": "Dominic Rico Gómez", "url": "https://github.com/dominicrico" },
