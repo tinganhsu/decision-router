@@ -1,6 +1,6 @@
 {
   "name": "jev-router",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Asks TypeSafe Jev before each task which Claude model and effort fit best, then runs the turn on it",
   "types": "./types/index.d.ts",
   "author": { "name": "Dominic Rico Gómez", "url": "https://github.com/dominicrico" },
@@ -31,8 +31,8 @@
     },
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "Key for api.typesafe.ai (Jev). Alternatives: TYPESAFE_API_KEY env var, or /jev key <key>",
+      "title": "Router API key",
+      "description": "Key sent to whichever router endpoint is set (https or localhost only). For TypeSafe Jev you can instead use the TYPESAFE_API_KEY env var or /jev key <key>, which are only ever sent to api.typesafe.ai",
       "sensitive": true,
       "required": false
     },

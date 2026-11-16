@@ -1,5 +1,8 @@
 name: ci
 
+permissions:
+  contents: read # the jobs only read the repo
+
 on:
   push:
     branches: [main]
@@ -14,7 +17,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - run: npm i -g @anthropic-ai/claude-code
+      - run: npm i -g --ignore-scripts @anthropic-ai/claude-code@2.1.325 # pinned; bump it together with the engine types the plugin is checked against
       # Both ran offline with an empty config dir locally (no login, no API key), so no auth is needed.
       - run: claude plugin validate .
       - run: claude plugin test .
@@ -27,6 +30,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts # dev tooling only; no install script has to run
       - run: npm run typecheck
       - run: npm run check:defaults

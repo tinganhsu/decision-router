@@ -123,6 +123,9 @@ export const PRESETS: Record<string, { ceiling: string; cap: EffortCap; mode: Mo
   balanced: { ceiling: 'none', cap: 'high', mode: 'balanced' },
   max: { ceiling: 'none', cap: 'none', mode: 'efficient' },
 }
+// Own properties only: `constructor` or `__proto__` typed as a model, router or preset name must not find anything.
+const has = (table: object, name: unknown): name is string => typeof name === 'string' && Object.hasOwn(table, name)
+const presetOf = (name: unknown) => (has(PRESETS, name) ? PRESETS[name] : undefined)
 
 // Jev's effort drives token use more than its model pick does, so it is capped.
 // `capped` is what Jev wanted when the cap lowered it.
@@ -184,8 +187,10 @@ export function decide(picked: Picked, cache: Cache | null, now: number, cfg: Co
   return { ...picked, alias: from, model: cache.model, kept: picked.alias }
 }
 
-const bar = (n: number, on: string, off: string, len: number) =>
-  on.repeat(Math.round(n * len)) + off.repeat(len - Math.round(n * len))
+const bar = (n: number, on: string, off: string, len: number) => {
+  const filled = Math.round(Math.min(1, Math.max(0, n || 0)) * len)
+  return on.repeat(filled) + off.repeat(len - filled)
+}
 const gauge = (c: number) => bar(c, '▮', '▯', 5)
 const tier = (alias: string) => `${alias} ${'▂▄▆█'.slice(0, RANK.indexOf(alias) + 1).padEnd(4, '_')}`
 const effortBar = (e: Effort) => bar((EFFORTS.indexOf(e) + 1) / EFFORTS.length, '▰', '▱', 5)
@@ -268,7 +273,7 @@ async function buildState($: EngineInterface, text: string, mode: Mode, cache: C
   const current = await $.session.model()
   const history = (await $.session.messages())
     .slice(-8)
-    .map(m => `${m.role}: ${m.text.slice(0, 700)}`)
+    .map(m => `${m.role}: ${(cfg.redact ? redact(m.text) : m.text).slice(0, 700)}`) // redact first: a key cut in half would no longer match
     .join('\n')
     .slice(-6000)
 
@@ -277,12 +282,13 @@ async function buildState($: EngineInterface, text: string, mode: Mode, cache: C
 
 // Secrets that must not leave the machine inside a prompt or the conversation sent to Jev.
 const SECRETS: RegExp[] = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, // an unfinished block (cut by a length limit) goes to the end of the text
   /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi,
-  /\bBasic\s+[A-Za-z0-9+/]{8,}={0,2}/g, // Authorization: Basic <base64 of user:password>
+  /(?<=\bAuthorization\s*[:=]\s*)Basic\s+[A-Za-z0-9+/]{8,}={0,2}/gi, // Authorization: Basic <base64 of user:password>; the header name keeps plain prose like "Basic authentication" alone
+  /\bgithub_pat_[A-Za-z0-9_]{22,}/g,
   /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, // Slack
   /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google API keys
@@ -291,12 +297,14 @@ const SECRETS: RegExp[] = [
   /\bglpat-[\w-]{20,}/g, // GitLab
 ]
 // NAME=value / "name": "value" for names that read like a secret, and user:password@ in URLs.
-const SECRET_NAME = /\b([\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|hash[_-]?(?:key|iv)|(?:private|access|signing|encryption|deploy|ssh)[_-]?key)[\w.-]*)(["']?\s*[=:]\s*["']?)(?!(?:string|number|boolean|null|undefined|true|false|any|object)\b)[^\s"',;}]{3,}/gi
+const SECRET_NAME = /\b([\w.-]{0,64}?(?:password|passwd|pwd|secret|token|api[_-]?key|hash[_-]?(?:key|iv)|(?:private|access|signing|encryption|deploy|ssh)[_-]?key)[\w.-]{0,64})(["']?\s*[=:]\s*)("[^"\n]{3,}"|'[^'\n]{3,}'|(?!(?:string|number|boolean|null|undefined|true|false|any|object)(?=[\s"',;}]|$))[^\s"',;}]{3,})/gi
+// the name is bounded (64 on each side), so a long run of secret-looking words cannot make the match cubic
 // 「密碼是 xxx」「密鑰：xxx」: the Chinese words for password and key, followed by a value of 3 or more characters.
-const ZH_SECRET = /(密碼|密码|密鑰|密钥|金鑰|金钥|口令)(\s*(?:是|為|为|[:：=])\s*)[^\s,，;；"'。]{3,}/g
-const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):[^\s@/]+@/gi
+const ZH_SECRET = /(密碼|密码|密鑰|密钥|金鑰|金钥|口令)(\s*(?:(?:是(?!否)|為|为)\s*[:：=]?|[:：=])\s*["'「『]?)[^\s,，;；"'」』。]{3,}/g
+const JEV_KEY_CMD = /(\/jev\s+key[\s=]+)\S+/gi // the command that stores the router key
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]*):[^\s@/]+@/gi
 export const redact = (text: string) =>
-  SECRETS.reduce((t, re) => t.replace(re, '[redacted]'), text).replace(SECRET_NAME, '$1$2[redacted]').replace(ZH_SECRET, '$1$2[redacted]').replace(URL_CREDENTIALS, '$1:[redacted]@')
+  SECRETS.reduce((t, re) => t.replace(re, '[redacted]'), text).replace(SECRET_NAME, (_m, name: string, sep: string, value: string) => `${name}${sep}${/^["']/.test(value) ? `${value[0]}[redacted]${value[0]}` : '[redacted]'}`).replace(ZH_SECRET, '$1$2[redacted]').replace(JEV_KEY_CMD, '$1[redacted]').replace(URL_CREDENTIALS, '$1:[redacted]@')
 
 // Han characters. A Chinese character carries about three English characters of meaning, so lengths are weighted by it.
 const CJK = /[㐀-鿿豈-﫿]/g
@@ -333,7 +341,7 @@ export function composeState(text: string, mode: Mode, current: string, history:
     history && cfg.sendHistory ? `Recent conversation:\n${clean(history)}` : 'Recent conversation: (none, this is the first task)',
     // Only for Chinese tasks, so English requests (and the English benchmarks) stay byte-identical.
     new RegExp(CJK.source).test(text) ? ZH_NOTE : '',
-    `New task from the user:\n${clean(text.slice(0, cfg.maxTaskChars))}`,
+    `New task from the user:\n${clean(text.slice(0, cfg.maxTaskChars * 4)).slice(0, cfg.maxTaskChars)}`,
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -386,6 +394,9 @@ export function jevBody(pool: string[], state: string, mode: Mode, router = JEV_
   }
 }
 
+// A router's confidence is a number from 0 to 1; anything else counts as 0 and an out-of-range value is cut to the range.
+const unit = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
+
 async function askJev($: EngineInterface, cfg: Config, key: string, state: string, mode: Mode) {
   if (key && !canCarryKey(cfg.routerUrl)) throw new Error('a key is only sent over https or to localhost; change routerUrl')
   const body = jevBody(cfg.pool, state, mode, cfg.routerModel)
@@ -403,13 +414,13 @@ async function askJev($: EngineInterface, cfg: Config, key: string, state: strin
   const reply = JSON.parse(res.text) as JevReply
   const alias = reply.answers?.model?.choice
   const effort = reply.answers?.effort?.choice as Effort | undefined
-  if (!alias || !cfg.pool.includes(alias)) throw new Error(`unexpected model choice: ${alias}`)
+  if (!alias || !cfg.pool.includes(alias)) throw new Error(`unexpected model choice: ${String(alias).slice(0, 20)}`)
 
   return {
     alias,
     model: alias,
     effort: effort && EFFORTS.includes(effort) ? effort : 'medium',
-    confidence: reply.answers?.model?.confidence ?? 0,
+    confidence: unit(reply.answers?.model?.confidence),
   }
 }
 
@@ -540,17 +551,17 @@ export const register: Register = (on, options) => {
   const timeoutMs = Number(options.timeoutMs ?? 4000)
   const allowed = (Array.isArray(options.models) ? options.models : Object.keys(CLAUDE))
     .map(m => String(m).toLowerCase())
-    .filter(m => m in CLAUDE)
-  const defaultMode: Mode = PRESETS[String(options.preset)]?.mode ?? (MODES.includes(options.mode as Mode) ? (options.mode as Mode) : 'balanced')
+    .filter(m => has(CLAUDE, m))
+  const defaultMode: Mode = presetOf(options.preset)?.mode ?? (MODES.includes(options.mode as Mode) ? (options.mode as Mode) : 'balanced')
 
   const defaultSticky: Sticky = STICKY.includes(options.stickiness as Sticky) ? (options.stickiness as Sticky) : 'auto'
-  const preset = PRESETS[String(options.preset)]
+  const preset = presetOf(options.preset)
   const defaultCap: EffortCap = preset?.cap ?? (CAPS.includes(options.effortCap as EffortCap) ? (options.effortCap as EffortCap) : PRESETS.lean!.cap)
-  const alias = (v: unknown, d = 'none') => (String(v) in CLAUDE || String(v) === 'none' ? String(v) : d)
+  const alias = (v: unknown, d = 'none') => (has(CLAUDE, String(v)) || String(v) === 'none' ? String(v) : d)
   const flag = (v: unknown, d: boolean) => (v === undefined || v === '' ? d : String(v) !== 'false')
   const num = (v: unknown, d: number) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d)
 
-  const router = String(options.router ?? '').toLowerCase() in ROUTERS ? String(options.router).toLowerCase() : 'jev'
+  const router = has(ROUTERS, String(options.router ?? '').toLowerCase()) ? String(options.router).toLowerCase() : 'jev'
   const cfg: Config = {
     apiKey,
     router,
@@ -565,14 +576,14 @@ export const register: Register = (on, options) => {
     routeSteps: flag(options.routeSteps, true),
     routeSubagents: flag(options.routeSubagents, true),
     escalateAfter: num(options.escalateAfter, 3),
-    ceiling: PRESETS[String(options.preset)]?.ceiling ?? alias(options.ceiling, PRESETS.lean!.ceiling),
+    ceiling: presetOf(options.preset)?.ceiling ?? alias(options.ceiling, PRESETS.lean!.ceiling),
     floor: alias(options.floor),
     ceilingBreak: num(options.ceilingBreak, 0.9),
     sendHistory: flag(options.sendHistory, true),
     redact: flag(options.redact, true),
     maxTaskChars: num(options.maxTaskChars, 8000),
     fallback: options.fallback === 'heuristic' ? 'heuristic' : 'session',
-    baseline: String(options.baselineModel ?? 'opus') in CLAUDE ? String(options.baselineModel ?? 'opus') : 'opus',
+    baseline: has(CLAUDE, String(options.baselineModel ?? 'opus')) ? String(options.baselineModel ?? 'opus') : 'opus',
     minConfidence: num(options.minConfidence, 0.7),
     minUpgradeConfidence: num(options.minUpgradeConfidence, 0),
     minDowngradeConfidence: num(options.minDowngradeConfidence, 0),
@@ -595,6 +606,7 @@ export const register: Register = (on, options) => {
       const t = $.clock.every(120, () => (++ticks > 5000 ? t.cancel() : update($, frameAtom, n => n + 1)))
       ticker = t
       skipNext = e.origin?.kind === 'task-notification'
+      if (skipNext) return // a notification is not the user's prompt: its text must not set markers for the next one
       const m = markers(e.text, cfg.pool)
       if (!m.pending || m.text.trim() === '') return
       await update($, pendingAtom, () => m.pending)
@@ -778,7 +790,7 @@ export const register: Register = (on, options) => {
     }
     if (arg.startsWith('preset')) {
       const v = arg.slice(6).trim()
-      const p = PRESETS[v]
+      const p = presetOf(v)
       if (!p) return usage('preset', Object.keys(PRESETS))
       await update($, presetAtom, () => v)
       await update($, ceilingAtom, () => p.ceiling)
@@ -789,13 +801,13 @@ export const register: Register = (on, options) => {
     }
     if (arg.startsWith('ceiling')) {
       const v = arg.slice(7).trim()
-      if (v !== 'none' && !(v in CLAUDE)) return usage('ceiling', [...Object.keys(CLAUDE), 'none'])
+      if (v !== 'none' && !has(CLAUDE, v)) return usage('ceiling', [...Object.keys(CLAUDE), 'none'])
       await update($, ceilingAtom, () => v)
       return applied('model ceiling', v)
     }
     if (arg.startsWith('floor')) {
       const v = arg.slice(5).trim()
-      if (v !== 'none' && !(v in CLAUDE)) return usage('floor', [...Object.keys(CLAUDE), 'none'])
+      if (v !== 'none' && !has(CLAUDE, v)) return usage('floor', [...Object.keys(CLAUDE), 'none'])
       await update($, floorAtom, () => v)
       return applied('model floor', v)
     }
@@ -819,10 +831,10 @@ export const register: Register = (on, options) => {
       if (arg === 'off') await update($, lastAtom, () => null)
       return { text: `Jev routing ${arg === 'on' ? 'enabled' : 'disabled; the session model is used'}.` }
     }
-    if (arg === 'key' || arg.startsWith('key ')) {
-      const key = e.args.trim().slice(3).trim()
+    if (/^key(\s|=|$)/.test(arg)) {
+      const key = e.args.trim().slice(3).replace(/^[\s=]+/, '').trim()
       if (key === '') return { text: 'Usage: /jev key <TypeSafe API key>   or   /jev key clear' }
-      if (key === 'clear') {
+      if (key.toLowerCase() === 'clear') {
         await $.store.delete('apiKey')
         return { text: 'Stored TypeSafe API key removed.' }
       }
@@ -842,7 +854,7 @@ export const register: Register = (on, options) => {
           ['pool', cfg.pool.join(' · ')],
           ['sticky', `${(await read($, stickyAtom)) ?? cfg.defaultSticky}   cache ${warm ? '● warm' : '○ cold'}`],
           ['cap', `${(await read($, capAtom)) ?? cfg.defaultCap}${(await read($, pendingAtom)) ? '   🔓 next prompt: overrides set' : ''}`],
-          ['preset', (await read($, presetAtom)) ?? (PRESETS[String(options.preset)] ? String(options.preset) : 'custom')],
+          ['preset', (await read($, presetAtom)) ?? (presetOf(options.preset) ? String(options.preset) : 'custom')],
           ['limits', `ceiling ${(await read($, ceilingAtom)) ?? cfg.ceiling} (break at ${cfg.ceilingBreak})   floor ${(await read($, floorAtom)) ?? cfg.floor}`],
           ['bars', `up ${cfg.minUpgradeConfidence ? `≥ ${cfg.minUpgradeConfidence}` : 'off'}   down ${cfg.minDowngradeConfidence ? `≥ ${cfg.minDowngradeConfidence}` : 'off'}   (confidence to switch to a stronger / cheaper model)`],
           ['last', last ? `${last.alias} / ${last.effort}  ${gauge(last.confidence)} ${last.confidence.toFixed(2)}${last.kept ? `  kept (wanted ${last.kept})` : ''}${last.held ? `  held (wanted ${last.held})` : ''}${last.capped ? `  capped from ${last.capped}` : ''}${last.clamped ? `  clamped from ${last.clamped}` : ''}` : 'none yet'],
@@ -854,6 +866,6 @@ export const register: Register = (on, options) => {
         ]),
       }
     }
-    return { text: `Unknown option "${arg}". Use: /jev ${COMMANDS}` }
+    return { text: `Unknown option "${arg.slice(0, 40)}". Use: /jev ${COMMANDS}` }
   }).catch(() => ({ text: 'Jev: that command failed; the debug log has the reason.' }))
 }

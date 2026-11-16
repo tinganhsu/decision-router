@@ -14,9 +14,10 @@
   目的地是 `routerUrl`（預設 `https://api.typesafe.ai/v1/systemone`）。
 - 送出前先遮蔽（`redact`）：私鑰區塊、`sk-`／`ghp_`／AWS／Stripe／Slack／Google／npm／GitLab 的金鑰格式、JWT、
   `Bearer` 與 `Basic` 授權標頭、`password=`／`token=`／`api_key=`／`HashKey=`／`HashIV=` 這類賦值，
-  URL 內的帳密，以及中文的「密碼是…」「密鑰：…」。**這是樣式比對，不保證抓得到所有機密。**
+  URL 內的帳密，以及中文的「密碼是…」「密鑰：…」，還有 `/jev key <key>` 這行指令本身。長度截斷前先遮蔽，所以被切斷的私鑰區塊也會整段遮掉。**這是樣式比對，不保證抓得到所有機密。**
   處理敏感內容時請把 `sendHistory` 設成 `false`。
-- 金鑰只在 `https://` 或本機（`localhost`、`127.0.0.1`、`[::1]`）上帶出去，其他主機的 `http://` 會直接拒絕。
+- 帶著金鑰時，只有 `https://` 或本機（`localhost`、`127.0.0.1`、`[::1]`）會送出，其他主機的 `http://` 會拒絕。沒有金鑰時，區網的 `http://` 路由器仍可用，但 prompt 文字會以明文傳輸，非本機的路由器請用 https。
+- 路由器回傳的信心值會夾在 0 到 1 之間，不是數字就當 0。路由器只能在你允許的模型中選，且仍受上下限與門檻約束；它能影響的只有成本，不能執行任何動作。
 - TypeSafe 金鑰（`/jev key`、`TYPESAFE_API_KEY`）只會送到 `api.typesafe.ai`，不會送到自訂的 `routerUrl`。
   `apiKey` 外掛選項則會送到你設定的任何路由端點。
 - 金鑰存在外掛儲存區，是純文字。`/jev key <key>` 這行指令會留在對話紀錄裡，建議改用環境變數。

@@ -16,14 +16,14 @@
 
 ## 與上游的差異
 
-| | 上游 jev-router 0.5.0 | 這個 fork（0.5.3） |
+| | 上游 jev-router 0.5.0 | 這個 fork（0.5.4） |
 |---|---|---|
 | 中文任務 | 與英文同樣處理 | 偵測到中文時，附上說明：依工作內容判斷，不看語言或字數（中文一字約是英文三倍資訊量） |
 | 備援規則（Jev 掛掉時） | 只認英文關鍵字 | 中文字數加權，並認得「改名、錯字、架構、根本原因、遷移」等詞 |
 | 模型名稱 | 把完整 id 寫在程式裡，Fable 還停在 `5-1` | 只送別名（`opus`），由 Claude Code 解析成該家族最新版，新版本不必改程式 |
 | 升降級門檻 | 只有「cache 有效時升級」一個門檻 | `minUpgradeConfidence`、`minDowngradeConfidence` 兩個獨立門檻 |
 | 機密遮蔽 | 常見金鑰與 `password=` 類 | 另外涵蓋綠界 `HashKey`／`HashIV`、Stripe、Slack、Google、JWT、`Basic` 標頭、中文「密碼是…」 |
-| 金鑰傳送 | 任何 `routerUrl` | 只透過 https 或本機位址；其他主機的 `http://` 拒絕 |
+| 金鑰傳送 | 任何 `routerUrl` | 帶金鑰時只透過 https 或本機位址；其他主機的 `http://` 拒絕 |
 | marketplace | `jev-router` | `decision-router` |
 
 ## 安裝
