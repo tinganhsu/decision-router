@@ -3,6 +3,12 @@
 All notable changes to jev-router are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] - 2026-11-16
+
+### Security
+- Found by a security review (Antigravity and Grok) and fixed, each with a test: a task longer than `maxTaskChars` was cut to a window before it was redacted, so a secret at the edge of that window went out half in clear text (now the whole task is redacted, then cut); an empty `PASSWORD=` or `password:` took the next line's name as its value, so the secret on that line went out in clear text (the separator now stays on its line).
+- The URL credentials pattern had an unbounded scheme, so a long run of letters and dots took quadratic time; the scheme is now bounded and redacting a whole task stays linear (1 MB of prose in milliseconds).
+
 ## [0.5.4] - 2026-11-16
 
 ### Security

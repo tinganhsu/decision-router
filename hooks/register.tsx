@@ -297,12 +297,13 @@ const SECRETS: RegExp[] = [
   /\bglpat-[\w-]{20,}/g, // GitLab
 ]
 // NAME=value / "name": "value" for names that read like a secret, and user:password@ in URLs.
-const SECRET_NAME = /\b([\w.-]{0,64}?(?:password|passwd|pwd|secret|token|api[_-]?key|hash[_-]?(?:key|iv)|(?:private|access|signing|encryption|deploy|ssh)[_-]?key)[\w.-]{0,64})(["']?\s*[=:]\s*)("[^"\n]{3,}"|'[^'\n]{3,}'|(?!(?:string|number|boolean|null|undefined|true|false|any|object)(?=[\s"',;}]|$))[^\s"',;}]{3,})/gi
+const SECRET_NAME = /\b([\w.-]{0,64}?(?:password|passwd|pwd|secret|token|api[_-]?key|hash[_-]?(?:key|iv)|(?:private|access|signing|encryption|deploy|ssh)[_-]?key)[\w.-]{0,64})(["']?[ \t]*[=:][ \t]*)("[^"\n]{3,}"|'[^'\n]{3,}'|(?!(?:string|number|boolean|null|undefined|true|false|any|object)(?=[\s"',;}]|$))[^\s"',;}]{3,})/gi
 // the name is bounded (64 on each side), so a long run of secret-looking words cannot make the match cubic
+// the separator stays on its line: an empty `PASSWORD=` must not take the next line's `API_KEY=` as its value
 // 「密碼是 xxx」「密鑰：xxx」: the Chinese words for password and key, followed by a value of 3 or more characters.
 const ZH_SECRET = /(密碼|密码|密鑰|密钥|金鑰|金钥|口令)(\s*(?:(?:是(?!否)|為|为)\s*[:：=]?|[:：=])\s*["'「『]?)[^\s,，;；"'」』。]{3,}/g
 const JEV_KEY_CMD = /(\/jev\s+key[\s=]+)\S+/gi // the command that stores the router key
-const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]*):[^\s@/]+@/gi
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]*):[^\s@/]+@/gi // a bounded scheme: unbounded, a long run of letters and dots made the scan quadratic
 export const redact = (text: string) =>
   SECRETS.reduce((t, re) => t.replace(re, '[redacted]'), text).replace(SECRET_NAME, (_m, name: string, sep: string, value: string) => `${name}${sep}${/^["']/.test(value) ? `${value[0]}[redacted]${value[0]}` : '[redacted]'}`).replace(ZH_SECRET, '$1$2[redacted]').replace(JEV_KEY_CMD, '$1[redacted]').replace(URL_CREDENTIALS, '$1:[redacted]@')
 
@@ -341,7 +342,8 @@ export function composeState(text: string, mode: Mode, current: string, history:
     history && cfg.sendHistory ? `Recent conversation:\n${clean(history)}` : 'Recent conversation: (none, this is the first task)',
     // Only for Chinese tasks, so English requests (and the English benchmarks) stay byte-identical.
     new RegExp(CJK.source).test(text) ? ZH_NOTE : '',
-    `New task from the user:\n${clean(text.slice(0, cfg.maxTaskChars * 4)).slice(0, cfg.maxTaskChars)}`,
+    // redact the whole task before cutting it: any window cut first can end inside a secret and leave its start unredacted
+    `New task from the user:\n${clean(text).slice(0, cfg.maxTaskChars)}`,
   ]
     .filter(Boolean)
     .join('\n\n')
