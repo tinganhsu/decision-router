@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { PRESETS, aliasOf, capEffort, heuristic, limit, markers, redact, savingsLine, segments, stepUnits } from './register'
+import { PRESETS, aliasOf, capEffort, gate, heuristic, limit, markers, redact, savingsLine, segments, stepUnits, withContext } from './register'
 
 // Fake secrets, assembled at runtime so secret scanners do not flag this file.
 const SK = ['sk', '-abcdefghijklmnop1234'].join('')
@@ -704,4 +704,76 @@ test('a subagent whose spawn pick failed does not ask Jev again at its first ste
   expect(w.bodies.length).toBe(1) // the spawn's own attempt
   await step($, 't1', 'agent-6')
   expect(w.bodies.length).toBe(1)
+})
+
+// Separate confidence bars for spending more and spending less, against the model the session is on (sonnet in these tests).
+const bars = (up: number, down: number) => ({ options: { apiKey: 'k-test', ceiling: 'none', minUpgradeConfidence: up, minDowngradeConfidence: down } })
+
+test('an upgrade below minUpgradeConfidence stays on the current model, and the band says it was held', bars(0.95, 0), async ($, on) => {
+  const w = world(on, jev('opus', 'high'))
+  await $.turn.start({ text: 'redesign the queue', turnId: 't1' })
+  await step($, 't1')
+
+  expect(aliasOf(w.steps[0].model)).toBe('sonnet')
+  expect(segments('balanced', { turnId: 't1', model: 'sonnet', alias: 'sonnet', effort: 'high', confidence: 0.9, held: 'opus' } as any).map(x => x.text).join('')).toContain('held')
+})
+
+test('an upgrade at or above minUpgradeConfidence goes through', bars(0.3, 0.95), async ($, on) => {
+  const w = world(on, jev('opus', 'high'))
+  await $.turn.start({ text: 'redesign the queue', turnId: 't1' })
+  await step($, 't1')
+
+  expect(aliasOf(w.steps[0].model)).toBe('opus')
+})
+
+test('a downgrade below minDowngradeConfidence stays on the current model, a higher bar than the upgrade', bars(0.3, 0.95), async ($, on) => {
+  const w = world(on, jev('haiku', 'low'))
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+
+  expect(aliasOf(w.steps[0].model)).toBe('sonnet')
+})
+
+test('a downgrade at or above minDowngradeConfidence goes through', bars(0.3, 0.6), async ($, on) => {
+  const w = world(on, jev('haiku', 'low'))
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+
+  expect(aliasOf(w.steps[0].model)).toBe('haiku')
+})
+
+test('the confidence bars default to 0: every pick goes through as before', OPTS, async ($, on) => {
+  const w = world(on, jev('haiku', 'low'))
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+
+  expect(aliasOf(w.steps[0].model)).toBe('haiku')
+})
+
+test('gate is pure: same model, no current model or a current model outside the pool pass through', () => {
+  const cfg = { pool: ['sonnet', 'opus'], minUpgradeConfidence: 0.9, minDowngradeConfidence: 0.9 } as any
+  const pick = (alias: string, confidence: number) => ({ alias, model: alias, effort: 'high', confidence }) as any
+  expect(gate(pick('sonnet', 0.1), 'claude-sonnet-5-5', cfg).held).toBeUndefined()
+  expect(gate(pick('opus', 0.1), undefined, cfg).alias).toBe('opus')
+  expect(gate(pick('opus', 0.1), 'claude-haiku-5-5', cfg).alias).toBe('opus') // haiku is not allowed, so there is nothing to hold on
+  expect(gate(pick('opus', 0.1), 'claude-sonnet-5-5', cfg)).toMatchObject({ alias: 'sonnet', held: 'opus' })
+})
+
+test('a session on a 1M context model keeps the suffix on the models that have it', () => {
+  expect(withContext('opus', 'opus[1m]')).toBe('opus[1m]')
+  expect(withContext('sonnet', 'opus[1m]')).toBe('sonnet[1m]')
+  expect(withContext('claude-opus-5-5', 'opus[1m]')).toBe('claude-opus-5-5[1m]')
+  expect(withContext('haiku', 'opus[1m]')).toBe('haiku') // no 1M window there
+  expect(withContext('fable', 'opus[1m]')).toBe('fable') // unverified, so left alone
+  expect(withContext('fable', 'fable[1m]')).toBe('fable[1m]') // the session's own family keeps it
+  expect(withContext('opus', 'claude-opus-5-5')).toBe('opus')
+})
+
+test('the step is sent with the 1M suffix when the session model has it', { options: { apiKey: 'k-test', ceiling: 'none' } }, async ($, on) => {
+  const w = world(on, jev('opus', 'high'))
+  await $.turn.start({ text: 'redesign the queue', turnId: 't1' })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'opus[1m]', effort: 'medium', messageCount: 1 })) {
+  }
+
+  expect(w.steps[0].model).toBe('opus[1m]')
 })

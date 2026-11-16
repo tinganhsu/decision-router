@@ -94,6 +94,8 @@ export type Config = {
   floor: string
   ceilingBreak: number
   minConfidence: number
+  minUpgradeConfidence: number
+  minDowngradeConfidence: number
   minContextTokens: number
   cacheTtlMs: number
 }
@@ -161,6 +163,24 @@ export function limit(picked: Picked, ceiling: string, floor: string, ceilingBre
   return p
 }
 
+// Spending more and spending less each need their own confidence, measured against the model the session is on:
+// below the bar the pick is held and the task stays where it is. Both default to 0 (every pick goes through).
+// Nothing to hold on when there is no current model, it is the pick itself, or it is not an allowed model.
+export function gate(picked: Picked, current: string | undefined, cfg: Pick<Config, 'pool' | 'minUpgradeConfidence' | 'minDowngradeConfidence'>): Picked {
+  const from = current ? aliasOf(current) : undefined
+  if (!from || from === picked.alias || !cfg.pool.includes(from)) return picked
+  const bar = RANK.indexOf(picked.alias) > RANK.indexOf(from) ? cfg.minUpgradeConfidence : cfg.minDowngradeConfidence
+  return picked.confidence >= bar ? picked : { ...picked, alias: from, model: from, held: picked.alias }
+}
+
+// A session on a 1M context model (`opus[1m]`) keeps that window on the models that have it. Sonnet and Opus are
+// known to; any other family only when it is the session's own. Haiku never, and Fable is left alone until verified.
+export function withContext(model: string, session: string): string {
+  const family = aliasOf(model)
+  if (!/\[1m\]$/i.test(session) || model.includes('[') || !family) return model
+  return family === 'sonnet' || family === 'opus' || family === aliasOf(session) ? `${model}[1m]` : model
+}
+
 // A switch discards the prompt cache. While it is warm and worth keeping, stay
 // on the cached model unless Jev confidently asks for a stronger one.
 export function decide(picked: Picked, cache: Cache | null, now: number, cfg: Config, sticky: Sticky): Picked {
@@ -204,6 +224,8 @@ export const segments = (mode: Mode, last: Decision | null, frame: number | null
   const differs = ran && ran.turnId === last.turnId && ran.alias !== last.alias // only within this task: a stale model from the last one is not a mismatch
   const model: Seg = last.kept
     ? { text: `${last.alias} (kept 🔒 cache warm; wanted ${last.kept})`, color: '#fbbf24' }
+    : last.held
+      ? { text: `${last.alias} (held: conf ${Math.round(last.confidence * 100)}% too low to switch; wanted ${last.held})`, color: '#fbbf24' }
     : differs
       ? { text: `${ran.alias} (picked ${last.alias})`, color: '#fbbf24', bold: true }
       : { text: `${tier(last.alias)}${last.pinned ? ' 📌' : ''}${last.escalated ? ' ↑' : ''}${last.clamped ? ` ⤒${last.clamped}` : ''}`, color: TIER_COLOR[last.alias], bold: true }
@@ -409,7 +431,7 @@ let skipNext = false // the next turn is a background notification, not a task o
 let task = '' // the prompt the current task started with, for re-routing its later steps
 const agents = new Map<string, Promise<Picked | null>>()
 
-async function decideFor($: EngineInterface, cfg: Config, kind: string, key: string, text: string, state: string, mode: Mode, cache: Cache | null, now: number, cap: EffortCap) {
+async function decideFor($: EngineInterface, cfg: Config, kind: string, key: string, text: string, state: string, mode: Mode, cache: Cache | null, now: number, cap: EffortCap, current?: string) {
   let asked: Picked
   try {
     asked = await ask($, cfg, key, state, mode)
@@ -418,10 +440,10 @@ async function decideFor($: EngineInterface, cfg: Config, kind: string, key: str
     asked = heuristic(text, cfg.pool)
     $.ui.log(`jev ${kind}: Jev unavailable (${(err as Error).message}), heuristic pick ${asked.alias}`, { to: 'debug' })
   }
-  const limited = limit(asked, (await read($, ceilingAtom)) ?? cfg.ceiling, (await read($, floorAtom)) ?? cfg.floor, cfg.ceilingBreak, cfg.pool)
+  const limited = limit(gate(asked, current, cfg), (await read($, ceilingAtom)) ?? cfg.ceiling, (await read($, floorAtom)) ?? cfg.floor, cfg.ceilingBreak, cfg.pool)
   const picked = decide(limited, cache, now, cfg, (await read($, stickyAtom)) ?? cfg.defaultSticky)
   const d = { ...picked, ...capEffort(picked.effort, cap) }
-  $.ui.log(`jev ${kind}: ${d.alias}/${d.effort}${d.kept ? ` (kept, wanted ${d.kept})` : ''}${d.capped ? ` (capped from ${d.capped})` : ''}${d.clamped ? ` (clamped from ${d.clamped})` : ''} conf ${d.confidence.toFixed(2)} cache ${cache ? `${isWarm(cache, now, cfg) ? 'warm' : 'cold'} ${cache.contextTokens} on ${cache.model}` : 'none'} ${(await $.clock.now()) - now} ms`, { to: 'debug' })
+  $.ui.log(`jev ${kind}: ${d.alias}/${d.effort}${d.kept ? ` (kept, wanted ${d.kept})` : ''}${d.held ? ` (held, wanted ${d.held})` : ''}${d.capped ? ` (capped from ${d.capped})` : ''}${d.clamped ? ` (clamped from ${d.clamped})` : ''} conf ${d.confidence.toFixed(2)} cache ${cache ? `${isWarm(cache, now, cfg) ? 'warm' : 'cold'} ${cache.contextTokens} on ${cache.model}` : 'none'} ${(await $.clock.now()) - now} ms`, { to: 'debug' })
 
   return d
 }
@@ -439,7 +461,7 @@ async function restep($: EngineInterface, cfg: Config, e: { turnId: string; inde
     if (((await read($, stickyAtom)) ?? cfg.defaultSticky) === 'strict' && isWarm(cache, now, cfg)) return last
     const text = `${task}\n\n[Routing step ${e.index + 1} of this task. The recent messages above show its progress.]`
     const cap = last.unlocked ? 'none' : (await read($, capAtom)) ?? cfg.defaultCap
-    const d = await decideFor($, cfg, `step ${e.index + 1}`, auth.key, text, await buildState($, text, mode, cache, now, cfg), mode, cache, now, cap)
+    const d = await decideFor($, cfg, `step ${e.index + 1}`, auth.key, text, await buildState($, text, mode, cache, now, cfg), mode, cache, now, cap, last.alias)
     if (last.escalated && RANK.indexOf(d.alias) <= RANK.indexOf(last.alias)) return last // never de-escalate within a task
     const next: Decision = { ...d, turnId: last.turnId, unlocked: last.unlocked }
     await update($, lastAtom, () => next)
@@ -540,6 +562,8 @@ export const register: Register = (on, options) => {
     fallback: options.fallback === 'heuristic' ? 'heuristic' : 'session',
     baseline: String(options.baselineModel ?? 'opus') in CLAUDE ? String(options.baselineModel ?? 'opus') : 'opus',
     minConfidence: num(options.minConfidence, 0.7),
+    minUpgradeConfidence: num(options.minUpgradeConfidence, 0),
+    minDowngradeConfidence: num(options.minDowngradeConfidence, 0),
     minContextTokens: num(options.minContextTokens, 8000),
     cacheTtlMs: num(options.cacheTtlMs, 300_000),
   }
@@ -660,7 +684,7 @@ export const register: Register = (on, options) => {
       // A pinned model skips Jev; its effort is the cap (high by default).
       const picked = pending?.pin
         ? { alias: pending.pin, model: pending.pin, effort: cap === 'none' ? 'high' : cap, confidence: 1, pinned: true }
-        : await decideFor($, cfg, 'prompt', auth!.key, e.text, await buildState($, e.text, mode, cache, now, cfg), mode, cache, now, cap)
+        : await decideFor($, cfg, 'prompt', auth!.key, e.text, await buildState($, e.text, mode, cache, now, cfg), mode, cache, now, cap, await $.session.model())
       const decision: Decision = { turnId: e.turnId, ...picked, unlocked }
       await update($, lastAtom, () => decision)
     } catch (err) {
@@ -709,7 +733,7 @@ export const register: Register = (on, options) => {
     const last = cfg.routeSteps && e.index > 0 && prev ? await restep($, cfg, e, prev) : prev
 
     // A model that takes no effort setting is sent none, whatever is asked.
-    const res = yield* next(last ? { ...e, model: last.model, effort: last.effort } : e)
+    const res = yield* next(last ? { ...e, model: withContext(last.model, e.model), effort: last.effort } : e)
 
     // Remember what the API actually cached, so the next turn can protect it.
     const u = res.usage
@@ -808,7 +832,7 @@ export const register: Register = (on, options) => {
           ['cap', `${(await read($, capAtom)) ?? cfg.defaultCap}${(await read($, pendingAtom)) ? '   🔓 next prompt: overrides set' : ''}`],
           ['preset', (await read($, presetAtom)) ?? (PRESETS[String(options.preset)] ? String(options.preset) : 'custom')],
           ['limits', `ceiling ${(await read($, ceilingAtom)) ?? cfg.ceiling} (break at ${cfg.ceilingBreak})   floor ${(await read($, floorAtom)) ?? cfg.floor}`],
-          ['last', last ? `${last.alias} / ${last.effort}  ${gauge(last.confidence)} ${last.confidence.toFixed(2)}${last.kept ? `  kept (wanted ${last.kept})` : ''}${last.capped ? `  capped from ${last.capped}` : ''}${last.clamped ? `  clamped from ${last.clamped}` : ''}` : 'none yet'],
+          ['last', last ? `${last.alias} / ${last.effort}  ${gauge(last.confidence)} ${last.confidence.toFixed(2)}${last.kept ? `  kept (wanted ${last.kept})` : ''}${last.held ? `  held (wanted ${last.held})` : ''}${last.capped ? `  capped from ${last.capped}` : ''}${last.clamped ? `  clamped from ${last.clamped}` : ''}` : 'none yet'],
           ...usageRows(totals?.models ?? {}, cfg.pool),
           ['saved', savingsLine(totals ?? (await tally($, cfg)))],
           ['router', `${cfg.router}  ${cfg.routerModel}${cfg.routerUrl === JEV_URL ? '' : `  @ ${cfg.routerUrl}`}`],

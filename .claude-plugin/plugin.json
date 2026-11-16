@@ -76,6 +76,18 @@
       "description": "With stickiness auto, a warm-cache upgrade needs at least this Jev confidence",
       "default": 0.7
     },
+    "minUpgradeConfidence": {
+      "type": "number",
+      "title": "Min confidence to spend more",
+      "description": "A pick of a stronger model than the session's needs at least this Jev confidence (0 to 1); below it the task stays on the current model. 0 follows every pick",
+      "default": 0
+    },
+    "minDowngradeConfidence": {
+      "type": "number",
+      "title": "Min confidence to spend less",
+      "description": "A pick of a cheaper model than the session's needs at least this Jev confidence (0 to 1); below it the task stays on the current model. Often set higher than the upgrade bar. 0 follows every pick",
+      "default": 0
+    },
     "minContextTokens": {
       "type": "number",
       "title": "Min context to protect",
