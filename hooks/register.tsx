@@ -173,14 +173,6 @@ export function gate(picked: Picked, current: string | undefined, cfg: Pick<Conf
   return picked.confidence >= bar ? picked : { ...picked, alias: from, model: from, held: picked.alias }
 }
 
-// A session on a 1M context model (`opus[1m]`) keeps that window on the models that have it. Sonnet and Opus are
-// known to; any other family only when it is the session's own. Haiku never, and Fable is left alone until verified.
-export function withContext(model: string, session: string): string {
-  const family = aliasOf(model)
-  if (!/\[1m\]$/i.test(session) || model.includes('[') || !family) return model
-  return family === 'sonnet' || family === 'opus' || family === aliasOf(session) ? `${model}[1m]` : model
-}
-
 // A switch discards the prompt cache. While it is warm and worth keeping, stay
 // on the cached model unless Jev confidently asks for a stronger one.
 export function decide(picked: Picked, cache: Cache | null, now: number, cfg: Config, sticky: Sticky): Picked {
@@ -733,7 +725,7 @@ export const register: Register = (on, options) => {
     const last = cfg.routeSteps && e.index > 0 && prev ? await restep($, cfg, e, prev) : prev
 
     // A model that takes no effort setting is sent none, whatever is asked.
-    const res = yield* next(last ? { ...e, model: withContext(last.model, e.model), effort: last.effort } : e)
+    const res = yield* next(last ? { ...e, model: last.model, effort: last.effort } : e)
 
     // Remember what the API actually cached, so the next turn can protect it.
     const u = res.usage

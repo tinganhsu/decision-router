@@ -7,7 +7,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 - `minUpgradeConfidence` and `minDowngradeConfidence`: separate confidence bars for moving to a stronger and to a cheaper model than the session's. Below its bar a pick is held and the task stays on the current model (the band says `held`, `/jev status` shows `held (wanted ...)`). Both default to 0, so nothing changes unless set.
-- A session on a 1M context model (`opus[1m]`) keeps the window when routing picks Opus or Sonnet (or the session's own family). Haiku never gets it; Fable is left alone until verified.
 
 ### Changed
 - The marketplace is `decision-router` (this fork): install with `/plugin marketplace add tinganhsu/decision-router` and `/plugin install jev-router@decision-router`. The plugin keeps its name, so `/jev` and its options are unchanged.
