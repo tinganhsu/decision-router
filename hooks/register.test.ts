@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { PRESETS, aliasOf, capEffort, gate, heuristic, limit, markers, redact, savingsLine, segments, stepUnits } from './register'
+import { PRESETS, aliasOf, canCarryKey, capEffort, gate, heuristic, limit, markers, redact, savingsLine, segments, stepUnits } from './register'
 
 // Fake secrets, assembled at runtime so secret scanners do not flag this file.
 const SK = ['sk', '-abcdefghijklmnop1234'].join('')
@@ -773,4 +773,46 @@ test('/jev status says the confidence bars are off at their default of 0', OPTS,
   const text = JSON.stringify(await $.command.run({ command: 'jev', args: 'status' } as any))
   expect(text).toContain('up off')
   expect(text).toContain('down off')
+})
+
+// Fake secrets again, assembled at runtime. These are the formats and Taiwan-specific names the first redact missed.
+test('redact hides ECPay hash keys, other well-known token formats and Chinese password phrases', () => {
+  const j = (...p: string[]) => p.join('')
+  const cases: [string, string][] = [
+    [j('ECPAY_HASH_', 'KEY=5294y06JbISpM5x9'), 'ECPAY_HASH_KEY=[redacted]'],
+    [j('Hash', 'IV: v77hoKGq4kWxNNIS'), 'HashIV: [redacted]'],
+    [j('密碼', '是 hunter2abc'), '密碼是 [redacted]'],
+    [j('密碼', '：hunter2abc'), '密碼：[redacted]'],
+    [j('密钥', '=hunter2abc'), '密钥=[redacted]'],
+    [j('sk_', 'live_51H8abcdefghijklmnop1234'), '[redacted]'],
+    [j('xox', 'b-123456789012-abcdefghijklmnop'), '[redacted]'],
+    [j('AIza', 'SyA1234567890abcdefghijklmnopqrstuv'), '[redacted]'],
+    [j('eyJhbGciOiJIUzI1NiJ9', '.eyJzdWIiOiIxMjM0NTY3ODkwIn0', '.abc123def456ghi789'), '[redacted]'],
+    [j('Authorization: Ba', 'sic dXNlcjpwYXNzd29yZA=='), 'Authorization: [redacted]'],
+    [j('npm_', 'abcdefghijklmnopqrstuvwxyz0123456789'), '[redacted]'],
+    [j('glpat', '-abcdefghij1234567890'), '[redacted]'],
+  ]
+  for (const [input, expected] of cases) expect(redact(input)).toBe(expected)
+  // ordinary Chinese and code are left alone
+  expect(redact('密碼欄位要加上強度檢查')).toBe('密碼欄位要加上強度檢查')
+  expect(redact('把 hashKey 這個變數改名成 digest')).toBe('把 hashKey 這個變數改名成 digest')
+})
+
+test('a key is only carried over https, or to a loopback host', () => {
+  expect(canCarryKey('https://api.typesafe.ai/v1/systemone')).toBe(true)
+  expect(canCarryKey('http://localhost:8000/v1/systemone')).toBe(true)
+  expect(canCarryKey('http://127.0.0.1:8009/v1/systemone')).toBe(true)
+  expect(canCarryKey('http://[::1]:8009/x')).toBe(true)
+  expect(canCarryKey('http://router.example.com/v1/systemone')).toBe(false)
+  expect(canCarryKey('http://localhost.evil.com/x')).toBe(false)
+  expect(canCarryKey('ftp://localhost/x')).toBe(false)
+  expect(canCarryKey('not a url')).toBe(false)
+})
+
+test('a key is not sent to a plain http router on another host', { options: { apiKey: 'k-test', routerUrl: 'http://router.example.com/v1/systemone' } }, async ($, on) => {
+  const w = world(on, jev('opus', 'high'))
+  await $.turn.start({ text: 'redesign the queue', turnId: 't1' })
+
+  expect(w.bodies.length).toBe(0)
+  expect(w.toasts.join()).toContain('http')
 })

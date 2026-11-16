@@ -282,12 +282,21 @@ const SECRETS: RegExp[] = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi,
+  /\bBasic\s+[A-Za-z0-9+/]{8,}={0,2}/g, // Authorization: Basic <base64 of user:password>
+  /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, // Slack
+  /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google API keys
+  /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g, // JWTs
+  /\bnpm_[A-Za-z0-9]{36}\b/g,
+  /\bglpat-[\w-]{20,}/g, // GitLab
 ]
 // NAME=value / "name": "value" for names that read like a secret, and user:password@ in URLs.
-const SECRET_NAME = /\b([\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|(?:private|access|signing|encryption|deploy|ssh)[_-]?key)[\w.-]*)(["']?\s*[=:]\s*["']?)(?!(?:string|number|boolean|null|undefined|true|false|any|object)\b)[^\s"',;}]{3,}/gi
+const SECRET_NAME = /\b([\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|hash[_-]?(?:key|iv)|(?:private|access|signing|encryption|deploy|ssh)[_-]?key)[\w.-]*)(["']?\s*[=:]\s*["']?)(?!(?:string|number|boolean|null|undefined|true|false|any|object)\b)[^\s"',;}]{3,}/gi
+// 「密碼是 xxx」「密鑰：xxx」: the Chinese words for password and key, followed by a value of 3 or more characters.
+const ZH_SECRET = /(密碼|密码|密鑰|密钥|金鑰|金钥|口令)(\s*(?:是|為|为|[:：=])\s*)[^\s,，;；"'。]{3,}/g
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):[^\s@/]+@/gi
 export const redact = (text: string) =>
-  SECRETS.reduce((t, re) => t.replace(re, '[redacted]'), text).replace(SECRET_NAME, '$1$2[redacted]').replace(URL_CREDENTIALS, '$1:[redacted]@')
+  SECRETS.reduce((t, re) => t.replace(re, '[redacted]'), text).replace(SECRET_NAME, '$1$2[redacted]').replace(ZH_SECRET, '$1$2[redacted]').replace(URL_CREDENTIALS, '$1:[redacted]@')
 
 // Han characters. A Chinese character carries about three English characters of meaning, so lengths are weighted by it.
 const CJK = /[㐀-鿿豈-﫿]/g
@@ -348,6 +357,16 @@ async function resolveKey($: EngineInterface, cfg: Config): Promise<{ key: strin
   return null
 }
 
+// A key travels over https, or to a host on this machine; plain http to anywhere else would put it on the network in the clear.
+export function canCarryKey(url: string): boolean {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'https:' || (u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname))
+  } catch {
+    return false
+  }
+}
+
 export function jevBody(pool: string[], state: string, mode: Mode, router = JEV_MODEL) {
   return {
     model: router,
@@ -368,6 +387,7 @@ export function jevBody(pool: string[], state: string, mode: Mode, router = JEV_
 }
 
 async function askJev($: EngineInterface, cfg: Config, key: string, state: string, mode: Mode) {
+  if (key && !canCarryKey(cfg.routerUrl)) throw new Error('a key is only sent over https or to localhost; change routerUrl')
   const body = jevBody(cfg.pool, state, mode, cfg.routerModel)
   const call = $.http.fetch(cfg.routerUrl, {
     method: 'POST',

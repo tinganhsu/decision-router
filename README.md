@@ -1,122 +1,128 @@
 <p align="center">
-  <img src="assets/logo.jpg" width="200" alt="Jev Router, the smug switchman raccoon">
+  <img src="assets/logo.jpg" width="160" alt="Jev Router 浣熊轉轍員">
 </p>
 
-<h1 align="center">jev-router: automatic Claude model routing for Claude Code</h1>
+<h1 align="center">decision-router（jev-router）</h1>
 
 <p align="center">
-  <em>Stop paying Opus prices for rename-a-variable work. Right model, right effort, every prompt, step and subagent.</em>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/github/v/release/dominicrico/jev-router?style=flat-square&color=111111&label=release&include_prereleases" alt="Release">
-  <img src="https://img.shields.io/badge/Claude%20Code-mod-111111?style=flat-square" alt="Claude Code mod">
-  <img src="https://img.shields.io/badge/models-haiku%20%C2%B7%20sonnet%20%C2%B7%20opus%20%C2%B7%20fable-111111?style=flat-square" alt="Models">
-  <img src="https://img.shields.io/badge/license-MIT-111111?style=flat-square" alt="MIT license">
+  <em>Claude Code 的模型路由外掛：每個任務挑「夠用的最便宜模型」與推理強度，並針對台灣繁體中文做過調整。</em>
 </p>
 
 <p align="center">
-  <img src="assets/hero.jpg" width="880" alt="jev-router: right model, right effort, every task. Tasks routed to haiku, sonnet or opus, minus 97% cost on trivial tasks, minus 65% on standard, 253 ms per pick. And yet hard tasks cost more.">
+  <img src="assets/band.gif" width="820" alt="輸入框上方的狀態列：模式、模型、effort、信心與 cache 狀態">
 </p>
 
-<p align="center">
-  <a href="https://dominicrico.github.io/jev-router/">Website</a> ·
-  <a href="#install-the-claude-code-plugin">Install</a> ·
-  <a href="#does-it-reduce-claude-code-costs">Proof</a> ·
-  <a href="#faq">FAQ</a> ·
-  <a href="OPTIONS.md">Reference</a> ·
-  <a href="CHANGELOG.md">Changelog</a>
-</p>
+這是 [dominicrico/jev-router](https://github.com/dominicrico/jev-router) 的 fork。外掛會在每次送出 prompt 前，問一個 System One 決策模型（預設是 TypeSafe Jev）該用哪個 Claude 模型、多少推理強度，然後讓這一輪用它的答案執行。
 
-**jev-router is a free Claude Code plugin that sends each prompt, step and subagent to the cheapest Claude model that can do the job** (Haiku, Sonnet, Opus, Fable), caps runaway reasoning effort, and shows you every pick in a live band above your prompt. No config needed.
+## 與上游的差異
 
-## Install the Claude Code plugin
+| | 上游 jev-router 0.5.0 | 這個 fork（0.5.3） |
+|---|---|---|
+| 中文任務 | 與英文同樣處理 | 偵測到中文時，附上說明：依工作內容判斷，不看語言或字數（中文一字約是英文三倍資訊量） |
+| 備援規則（Jev 掛掉時） | 只認英文關鍵字 | 中文字數加權，並認得「改名、錯字、架構、根本原因、遷移」等詞 |
+| 模型名稱 | 把完整 id 寫在程式裡，Fable 還停在 `5-1` | 只送別名（`opus`），由 Claude Code 解析成該家族最新版，新版本不必改程式 |
+| 升降級門檻 | 只有「cache 有效時升級」一個門檻 | `minUpgradeConfidence`、`minDowngradeConfidence` 兩個獨立門檻 |
+| 機密遮蔽 | 常見金鑰與 `password=` 類 | 另外涵蓋綠界 `HashKey`／`HashIV`、Stripe、Slack、Google、JWT、`Basic` 標頭、中文「密碼是…」 |
+| 金鑰傳送 | 任何 `routerUrl` | 只透過 https 或本機位址；其他主機的 `http://` 拒絕 |
+| marketplace | `jev-router` | `decision-router` |
+
+## 安裝
 
 ```
 /plugin marketplace add tinganhsu/decision-router
 /plugin install jev-router@decision-router
 ```
 
-Then `/jev key <your TypeSafe key>` (or set `TYPESAFE_API_KEY`) and run `/jev status`. That is the whole setup: the `lean` preset is on by default.
+接著設定 TypeSafe 金鑰（二擇一，建議用環境變數，因為 `/jev key` 這行指令會留在對話紀錄裡）：
 
-<p align="center">
-  <img src="assets/benefits.png" width="880" alt="Measured against always using Opus: minus 97 percent on small tasks, minus 65 percent on everyday work, minus 61 percent on hard tasks with 39 of 40 done, minus 56 percent on agent runs with subagents with 18 of 18 done.">
-</p>
+```
+export TYPESAFE_API_KEY=...        # 放進你的 shell 設定
+/jev key <你的 TypeSafe key>
+```
 
-## See every pick, live
+用 `/jev` 看狀態。更新：`/plugin marketplace update decision-router`，再執行 `/reload-plugins`。
 
-<p align="center">
-  <img src="assets/band.gif" width="880" alt="The band above the prompt stepping through its states: idle, running, haiku, sonnet, capped opus, ceiling, pinned, escalated, paused, off.">
-</p>
+> 從上游遷移：先 `/plugin uninstall jev-router@jev-router` 與 `/plugin marketplace remove jev-router`，再照上面安裝。外掛名稱沒變，`/jev` 指令與選項照舊，但 `settings.json` 裡的 `pluginConfigs` 要把鍵名改成 `jev-router@decision-router`。
 
-## What you get
+## 運作方式
 
-<p align="center">
-  <img src="assets/features.png" width="880" alt="Nine features: right model per prompt, re-routes every step, routes subagents, effort cap, Sonnet ceiling, cache guard, live band, per-prompt control, privacy controls.">
-</p>
+每個 prompt 依序經過：
 
-<p align="center">
-  <img src="assets/how.png" width="880" alt="How it works in six steps: a task arrives, ask Jev, check the cache, cap the effort, re-ask each step and route subagents, show it above the prompt.">
-</p>
+1. **標記**：prompt 開頭的 `!opus`、`!sonnet` 等直接指定模型（不問路由器），`!full` 解除 effort 上限。
+2. **詢問**：把路由模式、目前模型、cache 狀態、最近對話（可關）與你的任務組成一段文字，送給路由器。路由器回答兩題選擇題：用哪個模型、多少 effort，各附信心值。中文任務會多附一段說明。
+3. **門檻（`gate`）**：選到比 session 更強的模型，信心要達 `minUpgradeConfidence`；選到更便宜的，要達 `minDowngradeConfidence`。不夠就留在目前模型，狀態列顯示 `held`。
+4. **上下限（`limit`）**：模型不得高於 `ceiling`（除非信心達 `ceilingBreak`），不得低於 `floor`。
+5. **cache 保護（`decide`）**：prompt cache 還有效時，切換模型會讓快取作廢。預設只在信心夠高時才允許升級，降級一律拒絕。
+6. **effort 上限（`capEffort`）**：把推理強度壓在 `effortCap` 以下。
+7. **執行與重新判斷**：用選定的模型執行；開了 `routeSteps` 時，每一步重新判斷。工具呼叫連續失敗 `escalateAfter` 次會升一級。Subagent 依任務描述另外選模型。
 
-## Does it reduce Claude Code costs?
+路由器失敗、逾時，或連續失敗三次，外掛暫停一段時間並沿用 session 的模型，不會卡住你的操作。
 
-Yes, on most work, and the benchmarks say where it does not. Every number is a real Claude Code run (hard tasks are graded by hidden tests the agent never sees), and the raw runs are in the repo.
+## 建議設定（繁體中文使用者）
 
-<p align="center">
-  <img src="assets/hard.png" width="880" alt="Harder tasks graded by hidden tests, mean cost per run as a percentage of always opus: always sonnet 38 percent, jev-router lean 39 percent with 39 of 40 done.">
-</p>
+寫在 `~/.claude/settings.json` 的 `pluginConfigs["jev-router@decision-router"].options`：
 
-## Is it for you?
+```json
+{
+  "models": ["sonnet", "opus", "fable"],
+  "floor": "sonnet",
+  "ceiling": "opus",
+  "ceilingBreak": 0.85,
+  "minUpgradeConfidence": 0.3,
+  "minDowngradeConfidence": 0.6,
+  "cacheTtlMs": 300000,
+  "sendHistory": true
+}
+```
 
-<p align="center">
-  <img src="assets/fitfor.png" width="880" alt="Great for Opus-by-default users, many small tasks, agent runs with subagents and anyone who wants to see which model runs. Skip it if plain Sonnet already does all your work or you live in one huge warm session.">
-</p>
+- `models` 只列你願意用的模型。路由器只能在清單內選，所以清單裡沒有 haiku 時，`floor: haiku` 沒有意義。
+- `ceiling: opus` 加 `ceilingBreak: 0.85`：Fable 要路由器非常確定才會用。
+- 升級門檻低、降級門檻高：複雜任務容易升上去，要降下來必須有把握。
+- `cacheTtlMs: 300000`（5 分鐘）：cache 保護只維持這麼久。設成 1 小時會讓一次選到 Fable 的結果在一小時內黏住整個 session。
+- `sendHistory: true`：路由器看得到前幾句對話，「繼續」「用第二個」這類短句才判斷得準。代價是對話內容（已遮蔽機密）會送到路由器，處理敏感內容時請關掉。
 
-Long warm sessions are the honest weak spot: the cache guard cuts model switches from 6 to 1 and halves cache re-writes, but the bill stayed the same, and `lean` averaged Opus cost there while plain Sonnet was 43% cheaper. See the chart:
+所有選項與預設值見 [OPTIONS.md](OPTIONS.md)。預設值是 `lean` 組合（上限 Sonnet、effort 最高 medium）。
 
-<p align="center">
-  <img src="assets/cache.png" width="880" alt="Measured long sessions, 5 per strategy: always opus 48 cents, always sonnet 27, jev-router balanced with and without the cache guard 67 and 68, lean 48 with a range of 26 to 63 cents.">
-</p>
+## 指令
 
-## Commands
+| 指令 | 作用 |
+|---|---|
+| `/jev`、`/jev status` | 目前設定、cache、上次決定、各模型用量、估計節省 |
+| `/jev efficient` `balanced` `cheap` | 路由模式，下個任務生效 |
+| `/jev preset lean\|balanced\|max` | 一次切換上限、effort 上限與模式 |
+| `/jev ceiling <模型\|none>`、`/jev floor <模型\|none>` | 模型上下限 |
+| `/jev cap <effort\|none>`、`/jev full` | effort 上限；`full` 只解除下一個 prompt |
+| `/jev sticky off\|auto\|strict` | cache 保護強度 |
+| `/jev on`、`/jev off` | 啟用／停用，停用時用 session 的模型 |
+| `/jev key <key>`、`/jev stats clear` | 存金鑰；重設節省統計 |
 
-<p align="center">
-  <img src="assets/commands.png" width="880" alt="Cheat sheet: /jev status, /jev preset, /jev ceiling, /jev cap, /jev full, /jev key, and the prompt markers !opus, !sonnet, !haiku, !full, !cheap.">
-</p>
+Prompt 標記（只對該 prompt 有效，送給模型前會移除）：`!haiku` `!sonnet` `!opus` `!fable` `!full` `!cheap` `!efficient`。
 
-## Use another System One model
+狀態列說明：`opus (kept 🔒 cache warm; wanted haiku)` 是 cache 保護留下了目前模型；`sonnet (held: conf 50% too low to switch; wanted opus)` 是信心沒達門檻；`⤓xhigh` 是 effort 被上限壓低；`⤒opus` 是被模型上限壓低；`↑` 是失敗升級；`📌` 是手動指定。
 
-TypeSafe Jev is the default. Laya and Kev, two open System One models you run yourself, work too. All three speak the same `/v1/systemone` API, so switching is one option in `/plugin` → jev-router → configure (or the plugin's options in `settings.json`):
+## 換路由器
 
-| `router` | Endpoint | Model | Key |
-| --- | --- | --- | --- |
-| `jev` (default) | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` or `/jev key` (required) |
-| `laya` | `http://localhost:8000/v1/systemone` ([server](https://github.com/ZulfiFazhar/system-one)) | `laya` | `LAYA_API_KEY` (optional) |
-| `kev` | `http://127.0.0.1:8009/v1/systemone` ([server](https://github.com/jaredpalmer/kev)) | `kev-latest` | `KEV_API_KEY` (optional) |
+預設 TypeSafe Jev。Laya、Kev 這類同樣支援 `/v1/systemone` 介面的自架模型也能用，設定 `router`（`jev`、`laya`、`kev`），或用 `routerUrl` 與 `routerModel` 指向任何相容端點。TypeSafe 金鑰只送到 `api.typesafe.ai`。金鑰只會經由 https 或本機位址送出。
 
-`routerUrl` and `routerModel` override the endpoint and model, for a hosted Laya or Kev, another port, or a pinned version like `jev-1.14`. Your TypeSafe key is never sent anywhere but `api.typesafe.ai`; the `apiKey` plugin option is sent to whichever endpoint you set. `/jev status` shows the active router. Set `router` back to `jev` and clear the overrides to return to Jev.
+## 隱私與安全
 
-Laya's server rate-limits clients without a key to 10 calls a minute, and jev-router asks once per step. Set `LAYA_API_KEY`, or turn `routeSteps` off.
+會送出：prompt（最多 `maxTaskChars` 字）、可選的最近對話、subagent 任務文字。送出前先遮蔽私鑰、各家金鑰格式、JWT、`Bearer`／`Basic` 標頭、`password=`／`HashKey=` 這類賦值、URL 帳密與中文「密碼是…」。**這是樣式比對，不保證抓得到所有機密**，詳見 [SECURITY.md](SECURITY.md)。
 
-Every option, preset, command and the privacy details are in [OPTIONS.md](OPTIONS.md). Method, per-benchmark results and caveats are in [benchmarks/](benchmarks/README.md).
+## 成效：已量測與未量測
 
-## FAQ
+- **上游的量測**（英文任務、每個數字都是真實 Claude Code 執行，見 [benchmarks/](benchmarks/README.md)）：相對於一律用 Opus，小任務約省 97%、日常任務約省 65%；較難任務（隱藏測試評分）`lean` 約為 Opus 成本的 39%，40 題完成 39 題，而一律用 Sonnet 為 38%。長時間暖機 session 是弱點，`lean` 平均成本與 Opus 相當，一律用 Sonnet 便宜約 43%。這些是上游在當時預設值與四個模型下量的，本 fork 沒有重測。
+- **繁中處理的效果還沒量測。** `benchmarks/cases-zh-tw.json` 有 60 題（30 題由英文翻譯、30 題台灣情境，例如統一編號、綠界、電子發票、LINE Login、Big5 遷移），`benchmarks/analyze-zh.mts` 會比較不同路由器與有無中文說明的差異，需要 TypeSafe 金鑰才能跑，指令見 [benchmarks/README.md](benchmarks/README.md)。在跑出結果前，請把中文說明視為「有理由改善、但未證實」。
 
-**How do I switch between Opus, Sonnet and Haiku automatically in Claude Code?** Install jev-router; it picks per prompt, again before each step, and once per subagent. Pin one prompt with `!opus`, `!sonnet` or `!haiku`.
+## 開發
 
-**How do I reduce Claude Code token cost?** Send easy tasks to cheaper models and cap the reasoning effort. jev-router does both (small tasks −97%, everyday −65% against always Opus). If plain Sonnet already does your work, use that: it was cheapest on the hard set.
+```
+claude plugin test .       # 測試
+claude plugin validate .   # 驗證
+npm ci && npm run typecheck && npm run check:defaults
+```
 
-**What is the effort cap?** Jev often asks for `xhigh` reasoning on hard tasks, which can triple the tokens. The default `lean` preset limits effort to `medium`; `!full` lifts it for one prompt.
+CI 會跑同樣的檢查。程式在 `hooks/register.tsx`，測試在 `hooks/*.test.ts`。
 
-**Does it send my code to a third party?** The prompt, optionally recent messages, and subagent task text go to `api.typesafe.ai`. Keys, tokens, private keys and `password=` style values are redacted first, and `sendHistory` can turn the history off. Details in [OPTIONS.md](OPTIONS.md#privacy).
+## 授權
 
-**Will it slow Claude Code down?** Each Jev call adds about 250 ms; after three failures in a row it pauses for a minute and keeps your current model.
-
-**Why a raccoon?** He is a small creature that gets very serious about picking the right track.
-
-## License
-
-[MIT](LICENSE). Not affiliated with Anthropic or TypeSafe. Security issues: see [SECURITY.md](SECURITY.md).
-
-<sub>Keywords: Claude Code plugin, Claude model router, Claude Code cost optimization, Opus Sonnet Haiku switching, Claude Code subagents, prompt cache, reasoning effort, LLM routing.</sub>
+[MIT](LICENSE)。原作者 Dominic Rico Gómez。與 Anthropic、TypeSafe 無關。

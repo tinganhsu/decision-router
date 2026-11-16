@@ -3,6 +3,16 @@
 All notable changes to jev-router are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] - 2026-11-16
+
+### Security
+- `redact` also hides ECPay `HashKey`/`HashIV`, Stripe (`sk_live_`), Slack, Google, npm and GitLab tokens, JWTs, `Basic` authorization headers and Chinese phrases like 「密碼是…」「密鑰：…」. Before, none of these left the machine redacted.
+- A key is only sent over `https://` or to `localhost`/`127.0.0.1`/`[::1]`. A plain `http://` router on another host is refused with a toast, so an `apiKey` option can no longer go out in clear text.
+- `SECURITY.md` points to this fork and lists what is redacted; Dependabot also watches the npm dev dependencies.
+
+### Changed
+- README rewritten in Traditional Chinese: the fork's differences, install, recommended settings, pipeline and what is and is not measured.
+
 ## [0.5.2] - 2026-11-16
 
 ### Added
