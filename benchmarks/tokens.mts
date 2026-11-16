@@ -8,7 +8,6 @@ import { promisify } from 'node:util'
 import { capEffort } from '../hooks/register.tsx'
 
 const run = promisify(execFile)
-const IDS: Record<string, string> = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' }
 const cases: any[] = JSON.parse(readFileSync(new URL('cases.json', import.meta.url), 'utf8'))
 const raw: any[] = JSON.parse(readFileSync(new URL('results/raw.json', import.meta.url), 'utf8'))
 const OUT = new URL('results/tokens.json', import.meta.url)
@@ -37,7 +36,7 @@ async function one(j: Job) {
   if (done[j.key]) return
   const task = cases.find(c => c.id === j.id).text
   const args = ['-p', task, '--setting-sources', '', '--strict-mcp-config', '--disable-slash-commands', '--tools', '', '--no-session-persistence',
-    '--output-format', 'json', '--max-budget-usd', '1.5', '--append-system-prompt', SYSTEM, '--model', IDS[j.model]!, ...(j.effort ? ['--effort', j.effort] : [])]
+    '--output-format', 'json', '--max-budget-usd', '1.5', '--append-system-prompt', SYSTEM, '--model', j.model, ...(j.effort ? ['--effort', j.effort] : [])]
   try {
     const { stdout } = await run('claude', args, { cwd, maxBuffer: 64e6, timeout: 600_000 })
     const d = JSON.parse(stdout)

@@ -19,24 +19,21 @@ const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const CAPS: readonly EffortCap[] = [...EFFORTS, 'none']
 
 // weight: relative price per token, the multipliers the `about` lines state (fable has none, 10 is an assumption).
-const CLAUDE: Record<string, { id: string; about: string; weight: number }> = {
+// No model ids: the engine resolves an alias (`opus`) to that family's current model, so a new release needs no update here.
+const CLAUDE: Record<string, { about: string; weight: number }> = {
   haiku: {
-    id: 'claude-haiku-5-5',
     weight: 1,
     about: 'Claude Haiku: fastest and cheapest (~1x). Simple edits, renames, lookups, short answers, boilerplate.',
   },
   sonnet: {
-    id: 'claude-sonnet-5-5',
     weight: 3,
     about: 'Claude Sonnet: strong general coding at mid cost (~3x). Features, refactors, tests, normal debugging.',
   },
   opus: {
-    id: 'claude-opus-5-5',
     weight: 5,
     about: 'Claude Opus: top reasoning at high cost (~5x). Hard debugging, architecture, large multi-file changes.',
   },
   fable: {
-    id: 'claude-fable-5-1',
     weight: 10,
     about: 'Claude Fable: most capable, highest cost. The hardest, longest, most ambiguous tasks.',
   },
@@ -97,6 +94,8 @@ export type Config = {
   floor: string
   ceilingBreak: number
   minConfidence: number
+  minUpgradeConfidence: number
+  minDowngradeConfidence: number
   minContextTokens: number
   cacheTtlMs: number
 }
@@ -115,7 +114,8 @@ let totals: Savings | null = null // loaded from the store once, then kept in me
 
 // Cheapest to dearest (CLAUDE's key order); a switch up this ladder is an upgrade.
 const RANK = Object.keys(CLAUDE)
-const aliasOf = (model: string) => Object.keys(CLAUDE).find(a => CLAUDE[a]!.id === model)
+// The family of any model id the engine or the API reports (`claude-fable-5-2`, `us.anthropic.claude-opus-6-0-v1:0`, `opus[1m]`), by name.
+export const aliasOf = (model: string) => RANK.find(a => new RegExp(`\\b${a}\\b`, 'i').test(model))
 
 // Named bundles of the settings that decide how much a task may cost. `balanced` is the router's plain behaviour.
 export const PRESETS: Record<string, { ceiling: string; cap: EffortCap; mode: Mode }> = {
@@ -154,7 +154,7 @@ export const isWarm = (cache: Cache | null, now: number, cfg: Config): cache is 
 // The replacement is the nearest allowed model on the right side of the limit. Pure.
 export function limit(picked: Picked, ceiling: string, floor: string, ceilingBreak: number, pool: readonly string[]): Picked {
   const allowed = RANK.filter(a => pool.includes(a))
-  const move = (p: Picked, to: string | undefined): Picked => (to && to !== p.alias ? { ...p, alias: to, model: CLAUDE[to]!.id, clamped: picked.alias } : p)
+  const move = (p: Picked, to: string | undefined): Picked => (to && to !== p.alias ? { ...p, alias: to, model: to, clamped: picked.alias } : p)
   let p = picked
   if (ceiling !== 'none' && RANK.indexOf(p.alias) > RANK.indexOf(ceiling) && p.confidence < ceilingBreak)
     p = move(p, [...allowed].reverse().find(a => RANK.indexOf(a) <= RANK.indexOf(ceiling)))
@@ -163,10 +163,20 @@ export function limit(picked: Picked, ceiling: string, floor: string, ceilingBre
   return p
 }
 
+// Spending more and spending less each need their own confidence, measured against the model the session is on:
+// below the bar the pick is held and the task stays where it is. Both default to 0 (every pick goes through).
+// Nothing to hold on when there is no current model, it is the pick itself, or it is not an allowed model.
+export function gate(picked: Picked, current: string | undefined, cfg: Pick<Config, 'pool' | 'minUpgradeConfidence' | 'minDowngradeConfidence'>): Picked {
+  const from = current ? aliasOf(current) : undefined
+  if (!from || from === picked.alias || !cfg.pool.includes(from)) return picked
+  const bar = RANK.indexOf(picked.alias) > RANK.indexOf(from) ? cfg.minUpgradeConfidence : cfg.minDowngradeConfidence
+  return picked.confidence >= bar ? picked : { ...picked, alias: from, model: from, held: picked.alias }
+}
+
 // A switch discards the prompt cache. While it is warm and worth keeping, stay
 // on the cached model unless Jev confidently asks for a stronger one.
 export function decide(picked: Picked, cache: Cache | null, now: number, cfg: Config, sticky: Sticky): Picked {
-  if (sticky === 'off' || !isWarm(cache, now, cfg) || cache.model === picked.model) return picked
+  if (sticky === 'off' || !isWarm(cache, now, cfg) || aliasOf(cache.model) === picked.alias) return picked
   const from = aliasOf(cache.model)
   if (!from) return picked
   const upgrade = RANK.indexOf(picked.alias) > RANK.indexOf(from)
@@ -203,9 +213,11 @@ export const segments = (mode: Mode, last: Decision | null, frame: number | null
     if (!ran) return [...head, ...warn, { text: 'waiting for the first task', color: '#64748b' }]
     return [...head, ...warn, { text: `${ran.alias} (session model)`, color: '#94a3b8' }, ...cacheSeg]
   }
-  const differs = ran && ran.turnId === last.turnId && ran.model !== last.model // only within this task: a stale model from the last one is not a mismatch
+  const differs = ran && ran.turnId === last.turnId && ran.alias !== last.alias // only within this task: a stale model from the last one is not a mismatch
   const model: Seg = last.kept
     ? { text: `${last.alias} (kept 🔒 cache warm; wanted ${last.kept})`, color: '#fbbf24' }
+    : last.held
+      ? { text: `${last.alias} (held: conf ${Math.round(last.confidence * 100)}% too low to switch; wanted ${last.held})`, color: '#fbbf24' }
     : differs
       ? { text: `${ran.alias} (picked ${last.alias})`, color: '#fbbf24', bold: true }
       : { text: `${tier(last.alias)}${last.pinned ? ' 📌' : ''}${last.escalated ? ' ↑' : ''}${last.clamped ? ` ⤒${last.clamped}` : ''}`, color: TIER_COLOR[last.alias], bold: true }
@@ -277,15 +289,27 @@ const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):[^\s@/]+@/gi
 export const redact = (text: string) =>
   SECRETS.reduce((t, re) => t.replace(re, '[redacted]'), text).replace(SECRET_NAME, '$1$2[redacted]').replace(URL_CREDENTIALS, '$1:[redacted]@')
 
+// Han characters. A Chinese character carries about three English characters of meaning, so lengths are weighted by it.
+const CJK = /[㐀-鿿豈-﫿]/g
+const weightedLength = (text: string) => text.length + 2 * (text.match(CJK)?.length ?? 0)
+
 // Used only when Jev is down and `fallback` is 'heuristic'. ponytail: three buckets from length and a few words; real routing needs Jev.
 export function heuristic(text: string, pool: readonly string[]): Picked {
-  const hard = text.length > 1500 || /architect|design|migrat|root cause|concurren|race|deadlock|security|across .* (modules|services)/i.test(text)
-  const easy = text.length < 200 && /rename|typo|bump|format|lint|comment|where is|what does|show me/i.test(text)
+  const len = weightedLength(text)
+  const hard = len > 1500 || /architect|design|migrat|root cause|concurren|race|deadlock|security|across .* (modules|services)|架構|設計|遷移|搬遷|根本原因|根因|併發|競態|死結|資安|跨.*(模組|服務)/i.test(text)
+  const easy = len < 200 && /rename|typo|bump|format|lint|comment|where is|what does|show me|改名|重新命名|錯字|拼錯|版本號|格式化|註解|在哪|是什麼|做什麼|差在哪/i.test(text)
   const want = hard ? 'opus' : easy ? 'haiku' : 'sonnet'
   const alias = RANK.slice(RANK.indexOf(want)).find(a => pool.includes(a)) ?? RANK.filter(a => pool.includes(a)).pop()!
 
-  return { alias, model: CLAUDE[alias]!.id, effort: hard ? 'high' : easy ? 'low' : 'medium', confidence: 0.3 }
+  return { alias, model: alias, effort: hard ? 'high' : easy ? 'low' : 'medium', confidence: 0.3 }
 }
+
+// The router's instructions and model descriptions are English; this keeps a Chinese task from being judged by its surface.
+const ZH_NOTE =
+  'Language: the task is written in Traditional Chinese (Taiwan). Judge it exactly as you would the same task written in English, by the work it asks for. ' +
+  'A Chinese character carries about three English characters of meaning, so a short Chinese prompt is not necessarily a small task. ' +
+  'Polite or casual words (幫我, 請, 一下, 看看) say nothing about difficulty. ' +
+  'Small: 改名 (rename), 錯字 (typo), 查詢 (look up), 簡短回答 (short answer). Hard: 架構 (architecture), 根本原因 (root cause), 遷移 (migration), 併發 (concurrency), 資安 (security).'
 
 // Pure, so the benchmark sends Jev exactly what the mod sends.
 export function composeState(text: string, mode: Mode, current: string, history: string, cache: Cache | null, now: number, cfg: Config) {
@@ -298,6 +322,8 @@ export function composeState(text: string, mode: Mode, current: string, history:
       ? `Prompt cache: ${isWarm(cache, now, cfg) ? 'warm' : 'cold'}, ~${cache.contextTokens} tokens on ${cache.model}. Switching re-writes them.`
       : '',
     history && cfg.sendHistory ? `Recent conversation:\n${clean(history)}` : 'Recent conversation: (none, this is the first task)',
+    // Only for Chinese tasks, so English requests (and the English benchmarks) stay byte-identical.
+    new RegExp(CJK.source).test(text) ? ZH_NOTE : '',
     `New task from the user:\n${clean(text.slice(0, cfg.maxTaskChars))}`,
   ]
     .filter(Boolean)
@@ -361,7 +387,7 @@ async function askJev($: EngineInterface, cfg: Config, key: string, state: strin
 
   return {
     alias,
-    model: CLAUDE[alias]!.id,
+    model: alias,
     effort: effort && EFFORTS.includes(effort) ? effort : 'medium',
     confidence: reply.answers?.model?.confidence ?? 0,
   }
@@ -397,7 +423,7 @@ let skipNext = false // the next turn is a background notification, not a task o
 let task = '' // the prompt the current task started with, for re-routing its later steps
 const agents = new Map<string, Promise<Picked | null>>()
 
-async function decideFor($: EngineInterface, cfg: Config, kind: string, key: string, text: string, state: string, mode: Mode, cache: Cache | null, now: number, cap: EffortCap) {
+async function decideFor($: EngineInterface, cfg: Config, kind: string, key: string, text: string, state: string, mode: Mode, cache: Cache | null, now: number, cap: EffortCap, current?: string) {
   let asked: Picked
   try {
     asked = await ask($, cfg, key, state, mode)
@@ -406,10 +432,10 @@ async function decideFor($: EngineInterface, cfg: Config, kind: string, key: str
     asked = heuristic(text, cfg.pool)
     $.ui.log(`jev ${kind}: Jev unavailable (${(err as Error).message}), heuristic pick ${asked.alias}`, { to: 'debug' })
   }
-  const limited = limit(asked, (await read($, ceilingAtom)) ?? cfg.ceiling, (await read($, floorAtom)) ?? cfg.floor, cfg.ceilingBreak, cfg.pool)
+  const limited = limit(gate(asked, current, cfg), (await read($, ceilingAtom)) ?? cfg.ceiling, (await read($, floorAtom)) ?? cfg.floor, cfg.ceilingBreak, cfg.pool)
   const picked = decide(limited, cache, now, cfg, (await read($, stickyAtom)) ?? cfg.defaultSticky)
   const d = { ...picked, ...capEffort(picked.effort, cap) }
-  $.ui.log(`jev ${kind}: ${d.alias}/${d.effort}${d.kept ? ` (kept, wanted ${d.kept})` : ''}${d.capped ? ` (capped from ${d.capped})` : ''}${d.clamped ? ` (clamped from ${d.clamped})` : ''} conf ${d.confidence.toFixed(2)} cache ${cache ? `${isWarm(cache, now, cfg) ? 'warm' : 'cold'} ${cache.contextTokens} on ${cache.model}` : 'none'} ${(await $.clock.now()) - now} ms`, { to: 'debug' })
+  $.ui.log(`jev ${kind}: ${d.alias}/${d.effort}${d.kept ? ` (kept, wanted ${d.kept})` : ''}${d.held ? ` (held, wanted ${d.held})` : ''}${d.capped ? ` (capped from ${d.capped})` : ''}${d.clamped ? ` (clamped from ${d.clamped})` : ''} conf ${d.confidence.toFixed(2)} cache ${cache ? `${isWarm(cache, now, cfg) ? 'warm' : 'cold'} ${cache.contextTokens} on ${cache.model}` : 'none'} ${(await $.clock.now()) - now} ms`, { to: 'debug' })
 
   return d
 }
@@ -427,7 +453,7 @@ async function restep($: EngineInterface, cfg: Config, e: { turnId: string; inde
     if (((await read($, stickyAtom)) ?? cfg.defaultSticky) === 'strict' && isWarm(cache, now, cfg)) return last
     const text = `${task}\n\n[Routing step ${e.index + 1} of this task. The recent messages above show its progress.]`
     const cap = last.unlocked ? 'none' : (await read($, capAtom)) ?? cfg.defaultCap
-    const d = await decideFor($, cfg, `step ${e.index + 1}`, auth.key, text, await buildState($, text, mode, cache, now, cfg), mode, cache, now, cap)
+    const d = await decideFor($, cfg, `step ${e.index + 1}`, auth.key, text, await buildState($, text, mode, cache, now, cfg), mode, cache, now, cap, last.alias)
     if (last.escalated && RANK.indexOf(d.alias) <= RANK.indexOf(last.alias)) return last // never de-escalate within a task
     const next: Decision = { ...d, turnId: last.turnId, unlocked: last.unlocked }
     await update($, lastAtom, () => next)
@@ -469,7 +495,7 @@ async function tally($: EngineInterface, cfg: Config): Promise<Savings> {
 }
 
 // Add one step to the running totals (kept across sessions in the plugin store).
-async function record($: EngineInterface, cfg: Config, u: (StepUsage & { model: string }) | undefined) {
+async function record($: EngineInterface, cfg: Config, u: (StepUsage & { model: string }) | null | undefined) {
   const alias = u && aliasOf(u.model)
   if (!u || !alias) return
   totals ??= await tally($, cfg)
@@ -528,6 +554,8 @@ export const register: Register = (on, options) => {
     fallback: options.fallback === 'heuristic' ? 'heuristic' : 'session',
     baseline: String(options.baselineModel ?? 'opus') in CLAUDE ? String(options.baselineModel ?? 'opus') : 'opus',
     minConfidence: num(options.minConfidence, 0.7),
+    minUpgradeConfidence: num(options.minUpgradeConfidence, 0),
+    minDowngradeConfidence: num(options.minDowngradeConfidence, 0),
     minContextTokens: num(options.minContextTokens, 8000),
     cacheTtlMs: num(options.cacheTtlMs, 300_000),
   }
@@ -554,7 +582,7 @@ export const register: Register = (on, options) => {
     })().catch(oops($, 'prompt.submit'))
 
     return next(text === e.text ? e : { ...e, text })
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   on('turn.complete', async ($, e, next) => {
     stop()
@@ -564,7 +592,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'jev' }, async ($, e, next) => {
     await Promise.resolve().then(stop).catch(oops($, 'command.run')) // a /jev command is not a task: no spinner
     return next(e)
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   // Pick the subagent's model at spawn and show it in the subagent list.
   on('agent.spawn', async ($, e, next) => {
@@ -579,10 +607,10 @@ export const register: Register = (on, options) => {
     if (res.agentId) agents.set(res.agentId, Promise.resolve(pick)) // its steps reuse the pick (and its effort)
 
     return res
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const below = await next(e) // whatever other plugins draw here stays; ours goes last, right above the prompt
+    const below = await next(e) // whatever is drawn beneath stays; the engine orders the plugins' rows
     if (e.props.hasSurvey) return below
     const { Box, Text } = $.ui.resolve(e)
     const segs: Seg[] = (await read($, enabledAtom))
@@ -647,8 +675,8 @@ export const register: Register = (on, options) => {
       const cap = unlocked ? 'none' : (await read($, capAtom)) ?? cfg.defaultCap
       // A pinned model skips Jev; its effort is the cap (high by default).
       const picked = pending?.pin
-        ? { alias: pending.pin, model: CLAUDE[pending.pin]!.id, effort: cap === 'none' ? 'high' : cap, confidence: 1, pinned: true }
-        : await decideFor($, cfg, 'prompt', auth!.key, e.text, await buildState($, e.text, mode, cache, now, cfg), mode, cache, now, cap)
+        ? { alias: pending.pin, model: pending.pin, effort: cap === 'none' ? 'high' : cap, confidence: 1, pinned: true }
+        : await decideFor($, cfg, 'prompt', auth!.key, e.text, await buildState($, e.text, mode, cache, now, cfg), mode, cache, now, cap, await $.session.model())
       const decision: Decision = { turnId: e.turnId, ...picked, unlocked }
       await update($, lastAtom, () => decision)
     } catch (err) {
@@ -672,14 +700,14 @@ export const register: Register = (on, options) => {
       if (strikes >= cfg.escalateAfter && last && !last.escalated && !last.pinned) {
         const to = RANK[Math.min(RANK.indexOf(last.alias) + 1, RANK.length - 1)]!
         if (cfg.pool.includes(to) && to !== last.alias) {
-          await update($, lastAtom, () => ({ ...last, alias: to, model: CLAUDE[to]!.id, escalated: true }))
+          await update($, lastAtom, () => ({ ...last, alias: to, model: to, escalated: true }))
           $.ui.log(`jev escalate: ${last.alias} -> ${to} after ${strikes} failed tool calls`, { to: 'debug' })
         }
       }
     })().catch(oops($, 'tool.call'))
 
     return res
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   on('turn.step', async function* ($, e, next) {
     if (!(await read($, enabledAtom))) return yield* next(e)
@@ -757,7 +785,7 @@ export const register: Register = (on, options) => {
       return { text: 'Jev savings tally cleared.' }
     }
     if (arg === 'full') {
-      await update($, pendingAtom, p => ({ ...p, full: true }))
+      await update($, pendingAtom, p => ({ ...p, full: true as const }))
       return { text: 'Jev: the next prompt runs with the effort cap lifted.' }
     }
     if (arg.startsWith('cap')) {
@@ -796,7 +824,7 @@ export const register: Register = (on, options) => {
           ['cap', `${(await read($, capAtom)) ?? cfg.defaultCap}${(await read($, pendingAtom)) ? '   🔓 next prompt: overrides set' : ''}`],
           ['preset', (await read($, presetAtom)) ?? (PRESETS[String(options.preset)] ? String(options.preset) : 'custom')],
           ['limits', `ceiling ${(await read($, ceilingAtom)) ?? cfg.ceiling} (break at ${cfg.ceilingBreak})   floor ${(await read($, floorAtom)) ?? cfg.floor}`],
-          ['last', last ? `${last.alias} / ${last.effort}  ${gauge(last.confidence)} ${last.confidence.toFixed(2)}${last.kept ? `  kept (wanted ${last.kept})` : ''}${last.capped ? `  capped from ${last.capped}` : ''}${last.clamped ? `  clamped from ${last.clamped}` : ''}` : 'none yet'],
+          ['last', last ? `${last.alias} / ${last.effort}  ${gauge(last.confidence)} ${last.confidence.toFixed(2)}${last.kept ? `  kept (wanted ${last.kept})` : ''}${last.held ? `  held (wanted ${last.held})` : ''}${last.capped ? `  capped from ${last.capped}` : ''}${last.clamped ? `  clamped from ${last.clamped}` : ''}` : 'none yet'],
           ...usageRows(totals?.models ?? {}, cfg.pool),
           ['saved', savingsLine(totals ?? (await tally($, cfg)))],
           ['router', `${cfg.router}  ${cfg.routerModel}${cfg.routerUrl === JEV_URL ? '' : `  @ ${cfg.routerUrl}`}`],
@@ -806,5 +834,5 @@ export const register: Register = (on, options) => {
       }
     }
     return { text: `Unknown option "${arg}". Use: /jev ${COMMANDS}` }
-  })
+  }).catch(() => ({ text: 'Jev: that command failed; the debug log has the reason.' }))
 }

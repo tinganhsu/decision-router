@@ -82,6 +82,8 @@ When the cache wins, the band says so: `opus (kept 🔒 cache warm; wanted haiku
 | `routeSubagents` | `true` | Pick a model and effort for each subagent from its description |
 | `stickiness` | `auto` | `off`: always follow Jev. `auto`: while the cache is warm, only upgrade on high confidence. `strict`: never switch while warm |
 | `minConfidence` | `0.7` | Confidence needed for a warm-cache upgrade |
+| `minUpgradeConfidence` | `0` | Confidence needed to pick a stronger model than the session's. Below it the task stays on the current model and the band says `held`. `0` follows every pick |
+| `minDowngradeConfidence` | `0` | The same for a cheaper model. Usually set higher than the upgrade bar (for example 0.3 up, 0.6 down), so a task moves to a stronger model easily and to a cheaper one only when Jev is sure |
 | `minContextTokens` | `8000` | Below this a switch is free and stickiness is skipped |
 | `cacheTtlMs` | `300000` | Time after the last request when the cache counts as cold |
 | `timeoutMs` | `4000` | Keep the current model when Jev takes longer |

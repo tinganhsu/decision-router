@@ -97,8 +97,7 @@ test('another plugin AbovePrompt row survives next to the band', OPTS, async ($,
   const ui = await mountBand($)
   const band = JSON.stringify(await ui.drawn())
   expect(band).toContain('JEV')
-  expect(band).toContain('OTHER PLUGIN ROW')
-  expect(band.indexOf('OTHER PLUGIN ROW')).toBeLessThan(band.indexOf('JEV')) // the band stays last, right above the prompt
+  expect(band).toContain('OTHER PLUGIN ROW') // each plugin's row is its own part now; the engine (AbovePromptList) orders them
   await ui.unmount()
 })
 

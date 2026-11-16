@@ -13,6 +13,7 @@ export type Decision = {
   effort: Effort
   confidence: number
   kept?: string
+  held?: string
   capped?: Effort
   pinned?: boolean
   clamped?: string

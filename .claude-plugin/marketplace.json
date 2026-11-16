@@ -1,7 +1,12 @@
 {
-  "name": "jev-router",
-  "owner": { "name": "Dominic Rico Gómez", "url": "https://github.com/dominicrico" },
-  "metadata": { "description": "Claude Code mod: route each task to the right Claude model and effort with TypeSafe Jev" },
+  "name": "decision-router",
+  "owner": {
+    "name": "Tinganhsu",
+    "url": "https://github.com/tinganhsu"
+  },
+  "metadata": {
+    "description": "Fork of dominicrico/jev-router with Traditional Chinese (Taiwan) routing fixes: route each task to the right Claude model and effort"
+  },
   "plugins": [
     {
       "name": "jev-router",
