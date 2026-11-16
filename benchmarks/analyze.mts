@@ -9,7 +9,6 @@ const cases: any[] = JSON.parse(readFileSync(new URL('cases.json', import.meta.u
 const MODES = ['efficient', 'balanced', 'cheap']
 const TIERS = ['trivial', 'standard', 'hard']
 const ALIASES = ['haiku', 'sonnet', 'opus', 'fable']
-const IDS: Record<string, string> = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' }
 
 // Relative price per token. haiku/sonnet/opus are the mod's own ~1x/3x/5x; fable is only "highest", so 10x is an assumption.
 const W: Record<string, number> = { haiku: 1, sonnet: 3, opus: 5, fable: 10 }
@@ -67,7 +66,7 @@ out.push('\n## 5. Overhead\n', `Time added before each task: p50 **${q(ms, 0.5)}
 const mulberry = (a: number) => () => ((a = (a + 0x6d2b79f5) | 0), (((Math.imul(a ^ (a >>> 15), 1 | a) >>> 0) ^ ((a ^ (a >>> 7)) + Math.imul(a ^ (a >>> 7), 61 | a))) >>> 0) / 4294967296)
 const rnd = mulberry(7)
 const order = cases.map(c => c).sort(() => rnd() - 0.5)
-const pickOf = (id: string) => { const r = rows.find(x => x.id === id && x.mode === 'balanced' && x.run === 0)!; return { alias: r.model, model: IDS[r.model]!, effort: r.effort, confidence: r.confidence } }
+const pickOf = (id: string) => { const r = rows.find(x => x.id === id && x.mode === 'balanced' && x.run === 0)!; return { alias: r.model, model: r.model, effort: r.effort, confidence: r.confidence } }
 const cfg: any = { minConfidence: 0.7, minContextTokens: 8000, cacheTtlMs: 300_000 }
 const sim = (sticky: 'off' | 'auto' | 'strict', gapMs = 90_000) => {
   let cache: any = null

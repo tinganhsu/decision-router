@@ -5,8 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [0.5.1] - 2026-11-16
 
+### Changed
+- The marketplace is `decision-router` (this fork): install with `/plugin marketplace add tinganhsu/decision-router` and `/plugin install jev-router@decision-router`. The plugin keeps its name, so `/jev` and its options are unchanged.
+- A pick is sent to the engine as an alias (`opus`), which the engine resolves to that family's current model, and any reported model id is read back by its family name. No model id is written in the plugin, so a new release (Fable 6, Opus 7...) needs no update.
+
 ### Fixed
-- `fable` now routes to `claude-fable-5-2`. It still sent `claude-fable-5-1`, so a Fable pick ran the older model and the band and savings tally did not recognise a session already on Fable 5.2.
+- `fable` ran `claude-fable-5-1`, an id written in the plugin, so a Fable pick ran the older model and the band and savings tally did not recognise a session on Fable 5.2. Aliases fix this for every family.
+- Type errors `claude plugin validate` reported against the current engine types (a step's `usage` can be `null`, `/jev full`'s pending flag, the test fixtures), and the gating hooks now carry a `.catch` that lets the event through when the hook fails.
+- The band test no longer asserts the row order: the engine now draws each plugin's row as its own part and orders them itself.
 - A task written in Chinese now carries a short note to the router: judge the work it asks for, not its language or character count (Chinese is about three times denser per character), with Chinese words for small and hard work. English requests are unchanged byte for byte.
 - The `heuristic` fallback reads Chinese: lengths count a Han character as three, and it knows Chinese words for small tasks (改名, 錯字, 版本號...) and hard ones (架構, 根本原因, 遷移, 併發...).
 

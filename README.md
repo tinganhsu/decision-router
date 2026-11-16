@@ -33,8 +33,8 @@
 ## Install the Claude Code plugin
 
 ```
-/plugin marketplace add dominicrico/jev-router
-/plugin install jev-router@jev-router
+/plugin marketplace add tinganhsu/decision-router
+/plugin install jev-router@decision-router
 ```
 
 Then `/jev key <your TypeSafe key>` (or set `TYPESAFE_API_KEY`) and run `/jev status`. That is the whole setup: the `lean` preset is on by default.

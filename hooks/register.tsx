@@ -19,24 +19,21 @@ const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const CAPS: readonly EffortCap[] = [...EFFORTS, 'none']
 
 // weight: relative price per token, the multipliers the `about` lines state (fable has none, 10 is an assumption).
-const CLAUDE: Record<string, { id: string; about: string; weight: number }> = {
+// No model ids: the engine resolves an alias (`opus`) to that family's current model, so a new release needs no update here.
+const CLAUDE: Record<string, { about: string; weight: number }> = {
   haiku: {
-    id: 'claude-haiku-5-5',
     weight: 1,
     about: 'Claude Haiku: fastest and cheapest (~1x). Simple edits, renames, lookups, short answers, boilerplate.',
   },
   sonnet: {
-    id: 'claude-sonnet-5-5',
     weight: 3,
     about: 'Claude Sonnet: strong general coding at mid cost (~3x). Features, refactors, tests, normal debugging.',
   },
   opus: {
-    id: 'claude-opus-5-5',
     weight: 5,
     about: 'Claude Opus: top reasoning at high cost (~5x). Hard debugging, architecture, large multi-file changes.',
   },
   fable: {
-    id: 'claude-fable-5-2',
     weight: 10,
     about: 'Claude Fable: most capable, highest cost. The hardest, longest, most ambiguous tasks.',
   },
@@ -115,7 +112,8 @@ let totals: Savings | null = null // loaded from the store once, then kept in me
 
 // Cheapest to dearest (CLAUDE's key order); a switch up this ladder is an upgrade.
 const RANK = Object.keys(CLAUDE)
-const aliasOf = (model: string) => Object.keys(CLAUDE).find(a => CLAUDE[a]!.id === model)
+// The family of any model id the engine or the API reports (`claude-fable-5-2`, `us.anthropic.claude-opus-6-0-v1:0`, `opus[1m]`), by name.
+export const aliasOf = (model: string) => RANK.find(a => new RegExp(`\\b${a}\\b`, 'i').test(model))
 
 // Named bundles of the settings that decide how much a task may cost. `balanced` is the router's plain behaviour.
 export const PRESETS: Record<string, { ceiling: string; cap: EffortCap; mode: Mode }> = {
@@ -154,7 +152,7 @@ export const isWarm = (cache: Cache | null, now: number, cfg: Config): cache is 
 // The replacement is the nearest allowed model on the right side of the limit. Pure.
 export function limit(picked: Picked, ceiling: string, floor: string, ceilingBreak: number, pool: readonly string[]): Picked {
   const allowed = RANK.filter(a => pool.includes(a))
-  const move = (p: Picked, to: string | undefined): Picked => (to && to !== p.alias ? { ...p, alias: to, model: CLAUDE[to]!.id, clamped: picked.alias } : p)
+  const move = (p: Picked, to: string | undefined): Picked => (to && to !== p.alias ? { ...p, alias: to, model: to, clamped: picked.alias } : p)
   let p = picked
   if (ceiling !== 'none' && RANK.indexOf(p.alias) > RANK.indexOf(ceiling) && p.confidence < ceilingBreak)
     p = move(p, [...allowed].reverse().find(a => RANK.indexOf(a) <= RANK.indexOf(ceiling)))
@@ -166,7 +164,7 @@ export function limit(picked: Picked, ceiling: string, floor: string, ceilingBre
 // A switch discards the prompt cache. While it is warm and worth keeping, stay
 // on the cached model unless Jev confidently asks for a stronger one.
 export function decide(picked: Picked, cache: Cache | null, now: number, cfg: Config, sticky: Sticky): Picked {
-  if (sticky === 'off' || !isWarm(cache, now, cfg) || cache.model === picked.model) return picked
+  if (sticky === 'off' || !isWarm(cache, now, cfg) || aliasOf(cache.model) === picked.alias) return picked
   const from = aliasOf(cache.model)
   if (!from) return picked
   const upgrade = RANK.indexOf(picked.alias) > RANK.indexOf(from)
@@ -203,7 +201,7 @@ export const segments = (mode: Mode, last: Decision | null, frame: number | null
     if (!ran) return [...head, ...warn, { text: 'waiting for the first task', color: '#64748b' }]
     return [...head, ...warn, { text: `${ran.alias} (session model)`, color: '#94a3b8' }, ...cacheSeg]
   }
-  const differs = ran && ran.turnId === last.turnId && ran.model !== last.model // only within this task: a stale model from the last one is not a mismatch
+  const differs = ran && ran.turnId === last.turnId && ran.alias !== last.alias // only within this task: a stale model from the last one is not a mismatch
   const model: Seg = last.kept
     ? { text: `${last.alias} (kept 🔒 cache warm; wanted ${last.kept})`, color: '#fbbf24' }
     : differs
@@ -289,7 +287,7 @@ export function heuristic(text: string, pool: readonly string[]): Picked {
   const want = hard ? 'opus' : easy ? 'haiku' : 'sonnet'
   const alias = RANK.slice(RANK.indexOf(want)).find(a => pool.includes(a)) ?? RANK.filter(a => pool.includes(a)).pop()!
 
-  return { alias, model: CLAUDE[alias]!.id, effort: hard ? 'high' : easy ? 'low' : 'medium', confidence: 0.3 }
+  return { alias, model: alias, effort: hard ? 'high' : easy ? 'low' : 'medium', confidence: 0.3 }
 }
 
 // The router's instructions and model descriptions are English; this keeps a Chinese task from being judged by its surface.
@@ -375,7 +373,7 @@ async function askJev($: EngineInterface, cfg: Config, key: string, state: strin
 
   return {
     alias,
-    model: CLAUDE[alias]!.id,
+    model: alias,
     effort: effort && EFFORTS.includes(effort) ? effort : 'medium',
     confidence: reply.answers?.model?.confidence ?? 0,
   }
@@ -483,7 +481,7 @@ async function tally($: EngineInterface, cfg: Config): Promise<Savings> {
 }
 
 // Add one step to the running totals (kept across sessions in the plugin store).
-async function record($: EngineInterface, cfg: Config, u: (StepUsage & { model: string }) | undefined) {
+async function record($: EngineInterface, cfg: Config, u: (StepUsage & { model: string }) | null | undefined) {
   const alias = u && aliasOf(u.model)
   if (!u || !alias) return
   totals ??= await tally($, cfg)
@@ -568,7 +566,7 @@ export const register: Register = (on, options) => {
     })().catch(oops($, 'prompt.submit'))
 
     return next(text === e.text ? e : { ...e, text })
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   on('turn.complete', async ($, e, next) => {
     stop()
@@ -578,7 +576,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'jev' }, async ($, e, next) => {
     await Promise.resolve().then(stop).catch(oops($, 'command.run')) // a /jev command is not a task: no spinner
     return next(e)
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   // Pick the subagent's model at spawn and show it in the subagent list.
   on('agent.spawn', async ($, e, next) => {
@@ -593,10 +591,10 @@ export const register: Register = (on, options) => {
     if (res.agentId) agents.set(res.agentId, Promise.resolve(pick)) // its steps reuse the pick (and its effort)
 
     return res
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const below = await next(e) // whatever other plugins draw here stays; ours goes last, right above the prompt
+    const below = await next(e) // whatever is drawn beneath stays; the engine orders the plugins' rows
     if (e.props.hasSurvey) return below
     const { Box, Text } = $.ui.resolve(e)
     const segs: Seg[] = (await read($, enabledAtom))
@@ -661,7 +659,7 @@ export const register: Register = (on, options) => {
       const cap = unlocked ? 'none' : (await read($, capAtom)) ?? cfg.defaultCap
       // A pinned model skips Jev; its effort is the cap (high by default).
       const picked = pending?.pin
-        ? { alias: pending.pin, model: CLAUDE[pending.pin]!.id, effort: cap === 'none' ? 'high' : cap, confidence: 1, pinned: true }
+        ? { alias: pending.pin, model: pending.pin, effort: cap === 'none' ? 'high' : cap, confidence: 1, pinned: true }
         : await decideFor($, cfg, 'prompt', auth!.key, e.text, await buildState($, e.text, mode, cache, now, cfg), mode, cache, now, cap)
       const decision: Decision = { turnId: e.turnId, ...picked, unlocked }
       await update($, lastAtom, () => decision)
@@ -686,14 +684,14 @@ export const register: Register = (on, options) => {
       if (strikes >= cfg.escalateAfter && last && !last.escalated && !last.pinned) {
         const to = RANK[Math.min(RANK.indexOf(last.alias) + 1, RANK.length - 1)]!
         if (cfg.pool.includes(to) && to !== last.alias) {
-          await update($, lastAtom, () => ({ ...last, alias: to, model: CLAUDE[to]!.id, escalated: true }))
+          await update($, lastAtom, () => ({ ...last, alias: to, model: to, escalated: true }))
           $.ui.log(`jev escalate: ${last.alias} -> ${to} after ${strikes} failed tool calls`, { to: 'debug' })
         }
       }
     })().catch(oops($, 'tool.call'))
 
     return res
-  })
+  }).catch(($, e, next) => next(e)) // a failed hook lets the event through
 
   on('turn.step', async function* ($, e, next) {
     if (!(await read($, enabledAtom))) return yield* next(e)
@@ -771,7 +769,7 @@ export const register: Register = (on, options) => {
       return { text: 'Jev savings tally cleared.' }
     }
     if (arg === 'full') {
-      await update($, pendingAtom, p => ({ ...p, full: true }))
+      await update($, pendingAtom, p => ({ ...p, full: true as const }))
       return { text: 'Jev: the next prompt runs with the effort cap lifted.' }
     }
     if (arg.startsWith('cap')) {
@@ -820,5 +818,5 @@ export const register: Register = (on, options) => {
       }
     }
     return { text: `Unknown option "${arg}". Use: /jev ${COMMANDS}` }
-  })
+  }).catch(() => ({ text: 'Jev: that command failed; the debug log has the reason.' }))
 }
