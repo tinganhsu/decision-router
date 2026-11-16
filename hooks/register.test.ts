@@ -907,3 +907,29 @@ test('redact also catches a JWT whose signature uses + and /, and keeps multi-wo
   expect(redact('{"password": "my long password"}')).toBe('{"password": "[redacted]"}')
   expect(redact('密碼是: hunter2abc')).toBe('密碼是: [redacted]')
 })
+
+// ---- findings of the security review (agy + grok), each reproduced before it was fixed ----
+
+test('a secret cut by the task length limit is redacted before it is cut', { options: { apiKey: 'k-test', maxTaskChars: 100 } }, async ($, on) => {
+  const w = world(on, jev('opus', 'high'))
+  // a private key that shrinks to [redacted], so the text after it moves under the limit
+  const key = jj('-----BEGIN RSA PRIVATE ', 'KEY-----\n', 'M'.repeat(300), '\n-----END RSA PRIVATE KEY-----\n')
+  // the old 4x window ended inside this value, leaving its first characters unredacted
+  await $.turn.start({ text: `${key}password="super_secret_value_long_enough"`, turnId: 't1' })
+
+  const task = w.bodies[0].state.split('New task from the user:\n')[1]
+  expect(task).not.toContain('super_secret')
+  expect(task.length).toBeLessThanOrEqual(100)
+})
+
+test('an empty secret assignment does not take the next line as its value', () => {
+  expect(redact('PASSWORD=\nAPI_KEY="my_super_secret_key_123"')).toBe('PASSWORD=\nAPI_KEY="[redacted]"')
+  expect(redact('password:\nsecret_key: my_super_secret_key_123')).toBe('password:\nsecret_key: [redacted]')
+  expect(redact('TOKEN= \t\nDB_PASSWORD=hunter2abc')).toBe('TOKEN= \t\nDB_PASSWORD=[redacted]')
+})
+
+test('the whole task can be redacted: a long run of letters and dots stays linear (it was quadratic in the URL pattern)', () => {
+  const t = performance.now()
+  redact('a.'.repeat(100_000))
+  expect(performance.now() - t).toBeLessThan(1000)
+})
