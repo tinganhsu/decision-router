@@ -3,6 +3,13 @@
 All notable changes to jev-router are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-11-16
+
+### Fixed
+- `fable` now routes to `claude-fable-5-2`. It still sent `claude-fable-5-1`, so a Fable pick ran the older model and the band and savings tally did not recognise a session already on Fable 5.2.
+- A task written in Chinese now carries a short note to the router: judge the work it asks for, not its language or character count (Chinese is about three times denser per character), with Chinese words for small and hard work. English requests are unchanged byte for byte.
+- The `heuristic` fallback reads Chinese: lengths count a Han character as three, and it knows Chinese words for small tasks (改名, 錯字, 版本號...) and hard ones (架構, 根本原因, 遷移, 併發...).
+
 ## [0.5.0] - 2026-10-23
 
 ### Added

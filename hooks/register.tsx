@@ -36,7 +36,7 @@ const CLAUDE: Record<string, { id: string; about: string; weight: number }> = {
     about: 'Claude Opus: top reasoning at high cost (~5x). Hard debugging, architecture, large multi-file changes.',
   },
   fable: {
-    id: 'claude-fable-5-1',
+    id: 'claude-fable-5-2',
     weight: 10,
     about: 'Claude Fable: most capable, highest cost. The hardest, longest, most ambiguous tasks.',
   },
@@ -277,15 +277,27 @@ const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):[^\s@/]+@/gi
 export const redact = (text: string) =>
   SECRETS.reduce((t, re) => t.replace(re, '[redacted]'), text).replace(SECRET_NAME, '$1$2[redacted]').replace(URL_CREDENTIALS, '$1:[redacted]@')
 
+// Han characters. A Chinese character carries about three English characters of meaning, so lengths are weighted by it.
+const CJK = /[㐀-鿿豈-﫿]/g
+const weightedLength = (text: string) => text.length + 2 * (text.match(CJK)?.length ?? 0)
+
 // Used only when Jev is down and `fallback` is 'heuristic'. ponytail: three buckets from length and a few words; real routing needs Jev.
 export function heuristic(text: string, pool: readonly string[]): Picked {
-  const hard = text.length > 1500 || /architect|design|migrat|root cause|concurren|race|deadlock|security|across .* (modules|services)/i.test(text)
-  const easy = text.length < 200 && /rename|typo|bump|format|lint|comment|where is|what does|show me/i.test(text)
+  const len = weightedLength(text)
+  const hard = len > 1500 || /architect|design|migrat|root cause|concurren|race|deadlock|security|across .* (modules|services)|架構|設計|遷移|搬遷|根本原因|根因|併發|競態|死結|資安|跨.*(模組|服務)/i.test(text)
+  const easy = len < 200 && /rename|typo|bump|format|lint|comment|where is|what does|show me|改名|重新命名|錯字|拼錯|版本號|格式化|註解|在哪|是什麼|做什麼|差在哪/i.test(text)
   const want = hard ? 'opus' : easy ? 'haiku' : 'sonnet'
   const alias = RANK.slice(RANK.indexOf(want)).find(a => pool.includes(a)) ?? RANK.filter(a => pool.includes(a)).pop()!
 
   return { alias, model: CLAUDE[alias]!.id, effort: hard ? 'high' : easy ? 'low' : 'medium', confidence: 0.3 }
 }
+
+// The router's instructions and model descriptions are English; this keeps a Chinese task from being judged by its surface.
+const ZH_NOTE =
+  'Language: the task is written in Traditional Chinese (Taiwan). Judge it exactly as you would the same task written in English, by the work it asks for. ' +
+  'A Chinese character carries about three English characters of meaning, so a short Chinese prompt is not necessarily a small task. ' +
+  'Polite or casual words (幫我, 請, 一下, 看看) say nothing about difficulty. ' +
+  'Small: 改名 (rename), 錯字 (typo), 查詢 (look up), 簡短回答 (short answer). Hard: 架構 (architecture), 根本原因 (root cause), 遷移 (migration), 併發 (concurrency), 資安 (security).'
 
 // Pure, so the benchmark sends Jev exactly what the mod sends.
 export function composeState(text: string, mode: Mode, current: string, history: string, cache: Cache | null, now: number, cfg: Config) {
@@ -298,6 +310,8 @@ export function composeState(text: string, mode: Mode, current: string, history:
       ? `Prompt cache: ${isWarm(cache, now, cfg) ? 'warm' : 'cold'}, ~${cache.contextTokens} tokens on ${cache.model}. Switching re-writes them.`
       : '',
     history && cfg.sendHistory ? `Recent conversation:\n${clean(history)}` : 'Recent conversation: (none, this is the first task)',
+    // Only for Chinese tasks, so English requests (and the English benchmarks) stay byte-identical.
+    new RegExp(CJK.source).test(text) ? ZH_NOTE : '',
     `New task from the user:\n${clean(text.slice(0, cfg.maxTaskChars))}`,
   ]
     .filter(Boolean)

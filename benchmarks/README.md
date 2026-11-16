@@ -153,6 +153,20 @@ Headless `claude -p` runs with the mod loaded and `--debug-file`, reading the mo
 - A background-task notification **does** start a turn with text. It used to cost a Jev call and overwrite the task text, so the mod now ignores turns whose prompt origin is `task-notification`.
 - A failing `Bash` call **does** come back with `isError`, so escalation fires: three failed calls logged `jev escalate: haiku -> sonnet after 3 failed tool calls`.
 
+## Traditional Chinese (Taiwan) tasks
+
+No public System One leaderboard measures zh-TW, so `cases-zh-tw.json` holds 60 tasks in Taiwanese Mandarin: the 30 English cases translated (same ids, so the pick can be compared with the English original) and 30 written for Taiwan (統一編號, ECPay, 電子發票, LINE Login, Big5 migration, Asia/Taipei). `collect.mts` takes the case file, the output file and the router from the environment, so the same request can go to Jev, a self-hosted Kev or Laya, or any other `/v1/systemone` server such as StartLux-Decision:
+
+```
+export TYPESAFE_API_KEY=...
+CASES=cases-zh-tw.json OUT=results/zh-tw-jev.json npx tsx --tsconfig benchmarks/tsconfig.json benchmarks/collect.mts 3
+ROUTER=kev CASES=cases-zh-tw.json OUT=results/zh-tw-kev.json npx tsx --tsconfig benchmarks/tsconfig.json benchmarks/collect.mts 3
+ROUTER=kev ROUTER_URL=http://127.0.0.1:8010/v1/systemone ROUTER_MODEL=startlux-decision CASES=cases-zh-tw.json OUT=results/zh-tw-startlux.json npx tsx --tsconfig benchmarks/tsconfig.json benchmarks/collect.mts 3
+npx tsx --tsconfig benchmarks/tsconfig.json benchmarks/analyze-zh.mts   # no network, writes results/ZH-TW.md
+```
+
+`analyze-zh.mts` reports, per router: picks per tier, fit and under-serving split into translated and Taiwan-native tasks, repeat consistency, latency, the tasks it missed on every run, and (when `results/raw.json` exists) how often the translated task got the same model as its English original. With more than one `zh-tw-*.json` it adds a side-by-side table.
+
 ## Limits, said plainly
 
 - **Not measured: whether the answer was better.** The token runs are one run per task and strategy, no tools, in an empty directory, so a task that asks for "attached" files gets a plan instead of an edit. They measure how much each model and effort spends, not how good the result is.

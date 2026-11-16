@@ -504,6 +504,34 @@ test('heuristic fallback picks locally when Jev is down', { options: { apiKey: '
   expect(heuristic('add a button', ['sonnet']).alias).toBe('sonnet')
 })
 
+test('heuristic fallback reads Traditional Chinese prompts', () => {
+  const pool = ['haiku', 'sonnet', 'opus']
+  expect(heuristic('README 裡的錯字幫我修正', pool).alias).toBe('haiku')
+  expect(heuristic('把變數 usr 改名成 user', pool).alias).toBe('haiku')
+  expect(heuristic('找出結帳服務偶發重複扣款的根本原因', pool).alias).toBe('opus')
+  expect(heuristic('設計多院區共用的資料架構與遷移計畫', pool).alias).toBe('opus')
+  expect(heuristic('幫設定頁加一個深色模式切換', pool).alias).toBe('sonnet')
+  // Chinese carries about three times the content per character: 600 CJK characters is a long task
+  expect(heuristic('需求'.repeat(300), pool).alias).toBe('opus')
+})
+
+test('a Chinese task tells the router to judge the work, not the language or length', OPTS, async ($, on) => {
+  const w = world(on, jev('haiku', 'low'))
+  await $.turn.start({ text: '把首頁的「登入」按鈕文字改成「會員登入」', turnId: 't1' })
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't2' })
+
+  expect(w.bodies[0].state).toContain('Traditional Chinese')
+  expect(w.bodies[1].state).not.toContain('Traditional Chinese') // English requests stay byte-identical
+})
+
+test('fable routes to the current Fable model id', { options: { apiKey: 'k-test', ceiling: 'none' } }, async ($, on) => {
+  const w = world(on, jev('fable', 'high'))
+  await $.turn.start({ text: 'Design an end-to-end encrypted sharing scheme', turnId: 't1' })
+  await step($, 't1')
+
+  expect(w.steps[0].model).toBe('claude-fable-5-2')
+})
+
 test('a subagent is routed at spawn: model set, description tagged, steps reuse the pick', OPTS, async ($, on) => {
   const w = world(on, jev('haiku', 'low'))
   let seen: any
