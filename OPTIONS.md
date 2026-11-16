@@ -75,7 +75,7 @@ When the cache wins, the band says so: `opus (kept 🔒 cache warm; wanted haiku
 | `escalateAfter` | `3` | Failed tool calls in a row before the task moves up one model. `0` is off |
 | `baselineModel` | `opus` | The model the savings estimate compares against |
 | `sendHistory` | `true` | Send recent messages to Jev. Off sends only the task text |
-| `redact` | `true` | Replace API keys, tokens, private keys and `KEY=value` lines with `[redacted]` before sending |
+| `redact` | `true` | Replace keys, tokens, private keys, authorization headers, `NAME=value` secrets and Chinese 「密碼是…」 phrases with `[redacted]` before sending (see Privacy) |
 | `maxTaskChars` | `8000` | How much of the prompt is sent |
 | `fallback` | `session` | When Jev is down: `session` keeps the session model, `heuristic` guesses locally |
 | `routeSteps` | `true` | Ask Jev again before every step after the first. Off: one call per prompt |
@@ -91,5 +91,5 @@ When the cache wins, the band says so: `opus (kept 🔒 cache warm; wanted haiku
 
 ## Privacy
 
-Sent to `api.typesafe.ai` (or your `routerUrl`): the prompt text (up to `maxTaskChars`), recent messages if `sendHistory` is on, and subagent descriptions. Before sending, `redact` replaces API keys, GitHub tokens, AWS keys, bearer tokens, private key blocks and `NAME_KEY=value` style lines with `[redacted]`. That is pattern matching, not a guarantee, so keep `sendHistory` off if your conversations carry things it would not catch. Your TypeSafe key is stored in the plugin store in plain text if you use `/jev key`, and the command line lands in the transcript; prefer the `TYPESAFE_API_KEY` environment variable.
+Sent to `api.typesafe.ai` (or your `routerUrl`): the prompt text (up to `maxTaskChars`), recent messages if `sendHistory` is on, and subagent descriptions. Before sending, `redact` replaces private key blocks (also a half-cut one), API keys and tokens (GitHub, GitLab, AWS, Stripe, Slack, Google, npm, JWTs), `Bearer` and `Basic` authorization headers, `NAME=value` lines for names like `password`, `secret`, `token`, `api_key`, `HashKey`, `HashIV`, credentials inside URLs, Chinese phrases like 「密碼是…」, and the `/jev key <key>` command with `[redacted]`. That is pattern matching, not a guarantee, so keep `sendHistory` off if your conversations carry things it would not catch. A key is only sent over `https://` or to `localhost`, `127.0.0.1` or `[::1]`. Your TypeSafe key (`/jev key`, `TYPESAFE_API_KEY`) only goes to `api.typesafe.ai`; the `apiKey` option goes to whichever endpoint you set. The key is stored in the plugin store in plain text if you use `/jev key`, and the command line lands in the transcript; prefer the `TYPESAFE_API_KEY` environment variable.
 

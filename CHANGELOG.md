@@ -3,6 +3,19 @@
 All notable changes to jev-router are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.4] - 2026-11-16
+
+### Security
+- `redact` also hides ECPay `HashKey`/`HashIV`, Stripe (`sk_live_`), Slack, Google, npm and GitLab tokens, JWTs, `Basic` authorization headers and Chinese phrases like 「密碼是…」「密鑰：…」. Before, none of these left the machine redacted.
+- A key is only sent over `https://` or to `localhost`/`127.0.0.1`/`[::1]`: with a key set, a plain `http://` router on another host is refused with a toast. Without a key the prompt text still goes over plain `http://` (a router on your LAN keeps working), so use https for any router you do not run on this machine.
+- Found by a cross review and fixed, each with a test: `redact` took up to 25 s on 8,000 characters of repeated `password.` (now milliseconds); a private key cut by the history limit went out half in clear text (now redacted before it is cut, and an unfinished block is redacted to the end); quoted values with spaces, `password=true-…`, `redis://:pw@host`, `authorization: basic …`, `github_pat_…`, `/jev key …` and 「密碼是 "…"」 were not redacted, and plain prose like "Basic authentication" was; a router confidence outside 0 to 1 or not a number could break the band and the failure breaker (now clamped to 0..1); markers inside a background-task notification were saved for the next prompt; `/jev ceiling constructor` and `/jev preset constructor` were accepted; `/jev key CLEAR` stored the word as the key.
+- CI: read-only `GITHUB_TOKEN`, no credentials left in `.git/config`, a pinned Claude Code version, and no install scripts for the dev dependencies.
+- `redact` also hides a JWT whose signature is standard base64 (`+`, `/`).
+- `SECURITY.md` points to this fork and lists what is redacted; Dependabot also watches the npm dev dependencies.
+
+### Changed
+- README rewritten in Traditional Chinese: the fork's differences, install, recommended settings, pipeline and what is and is not measured.
+
 ## [0.5.2] - 2026-11-16
 
 ### Added

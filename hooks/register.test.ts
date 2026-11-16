@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { PRESETS, aliasOf, capEffort, gate, heuristic, limit, markers, redact, savingsLine, segments, stepUnits } from './register'
+import { PRESETS, aliasOf, canCarryKey, capEffort, gate, heuristic, limit, markers, redact, savingsLine, segments, stepUnits } from './register'
 
 // Fake secrets, assembled at runtime so secret scanners do not flag this file.
 const SK = ['sk', '-abcdefghijklmnop1234'].join('')
@@ -773,4 +773,137 @@ test('/jev status says the confidence bars are off at their default of 0', OPTS,
   const text = JSON.stringify(await $.command.run({ command: 'jev', args: 'status' } as any))
   expect(text).toContain('up off')
   expect(text).toContain('down off')
+})
+
+// Fake secrets again, assembled at runtime. These are the formats and Taiwan-specific names the first redact missed.
+test('redact hides ECPay hash keys, other well-known token formats and Chinese password phrases', () => {
+  const j = (...p: string[]) => p.join('')
+  const cases: [string, string][] = [
+    [j('ECPAY_HASH_', 'KEY=5294y06JbISpM5x9'), 'ECPAY_HASH_KEY=[redacted]'],
+    [j('Hash', 'IV: v77hoKGq4kWxNNIS'), 'HashIV: [redacted]'],
+    [j('密碼', '是 hunter2abc'), '密碼是 [redacted]'],
+    [j('密碼', '：hunter2abc'), '密碼：[redacted]'],
+    [j('密钥', '=hunter2abc'), '密钥=[redacted]'],
+    [j('sk_', 'live_51H8abcdefghijklmnop1234'), '[redacted]'],
+    [j('xox', 'b-123456789012-abcdefghijklmnop'), '[redacted]'],
+    [j('AIza', 'SyA1234567890abcdefghijklmnopqrstuv'), '[redacted]'],
+    [j('eyJhbGciOiJIUzI1NiJ9', '.eyJzdWIiOiIxMjM0NTY3ODkwIn0', '.abc123def456ghi789'), '[redacted]'],
+    [j('Authorization: Ba', 'sic dXNlcjpwYXNzd29yZA=='), 'Authorization: [redacted]'],
+    [j('npm_', 'abcdefghijklmnopqrstuvwxyz0123456789'), '[redacted]'],
+    [j('glpat', '-abcdefghij1234567890'), '[redacted]'],
+  ]
+  for (const [input, expected] of cases) expect(redact(input)).toBe(expected)
+  // ordinary Chinese and code are left alone
+  expect(redact('密碼欄位要加上強度檢查')).toBe('密碼欄位要加上強度檢查')
+  expect(redact('把 hashKey 這個變數改名成 digest')).toBe('把 hashKey 這個變數改名成 digest')
+})
+
+test('a key is only carried over https, or to a loopback host', () => {
+  expect(canCarryKey('https://api.typesafe.ai/v1/systemone')).toBe(true)
+  expect(canCarryKey('http://localhost:8000/v1/systemone')).toBe(true)
+  expect(canCarryKey('http://127.0.0.1:8009/v1/systemone')).toBe(true)
+  expect(canCarryKey('http://[::1]:8009/x')).toBe(true)
+  expect(canCarryKey('http://router.example.com/v1/systemone')).toBe(false)
+  expect(canCarryKey('http://localhost.evil.com/x')).toBe(false)
+  expect(canCarryKey('ftp://localhost/x')).toBe(false)
+  expect(canCarryKey('not a url')).toBe(false)
+})
+
+test('a key is not sent to a plain http router on another host', { options: { apiKey: 'k-test', routerUrl: 'http://router.example.com/v1/systemone' } }, async ($, on) => {
+  const w = world(on, jev('opus', 'high'))
+  await $.turn.start({ text: 'redesign the queue', turnId: 't1' })
+
+  expect(w.bodies.length).toBe(0)
+  expect(w.toasts.join()).toContain('http')
+})
+
+// ---- findings of the cross review (Antigravity), each reproduced before it was fixed ----
+const jj = (...p: string[]) => p.join('')
+
+test('redact finishes quickly on long runs of secret-looking words (no catastrophic backtracking)', () => {
+  for (const unit of ['pwd.', 'password.', 'token-', 'api_key.']) {
+    const t = performance.now()
+    redact(unit.repeat(8000 / unit.length))
+    expect(performance.now() - t).toBeLessThan(500)
+  }
+})
+
+test('redact catches quoted values with spaces, true-looking values, empty-user URLs, Basic in any case and /jev key', () => {
+  expect(redact('password="a secret_phrase_123"')).toBe('password="[redacted]"')
+  expect(redact('password=true-prod-secret-99')).toBe('password=[redacted]')
+  expect(redact('redis://:s3cr3tPass@redis.internal:6379/0')).toBe('redis://:[redacted]@redis.internal:6379/0')
+  expect(redact(jj('authorization: ba', 'sic dXNlcjpwYXNzd29yZA=='))).toBe('authorization: [redacted]')
+  expect(redact('/jev key ts_live_1234567890abcdef')).toBe('/jev key [redacted]')
+  expect(redact(jj('github_pat_', '11AAABBB0123456789_abcdefghijklmnopqrstuv'))).toBe('[redacted]')
+  expect(redact('密碼是 "hunter2abc"')).toBe('密碼是 "[redacted]"')
+  expect(redact('密碼是： hunter2abc')).toBe('密碼是： [redacted]')
+  // and what must stay readable
+  expect(redact('Basic authentication fails')).toBe('Basic authentication fails')
+  expect(redact('password: string')).toBe('password: string')
+  expect(redact('密碼欄位要加上強度檢查')).toBe('密碼欄位要加上強度檢查')
+  expect(redact('密碼是否正確要先檢查')).toBe('密碼是否正確要先檢查')
+})
+
+test('an unfinished private key block is redacted to the end of the text', () => {
+  const key = jj('-----BEGIN RSA PRIVATE ', 'KEY-----\n', 'MIIEowIBAAKCAQEA'.repeat(100), '\n-----END RSA PRIVATE KEY-----')
+  expect(redact(key.slice(0, 700))).toBe('[redacted]')
+})
+
+test('a private key cut by the history limit is redacted before it is cut, in the conversation sent to the router', OPTS, async ($, on) => {
+  const w = world(on, jev('opus', 'high'))
+  const key = jj('-----BEGIN RSA PRIVATE ', 'KEY-----\n', 'MIIEowIBAAKCAQEA'.repeat(100), '\n-----END RSA PRIVATE KEY-----')
+  w.messages.push({ role: 'user', text: key, toolUses: [] })
+  await $.turn.start({ text: 'redesign the queue', turnId: 't1' })
+
+  expect(w.bodies[0].state).not.toContain('MIIEowIBAAKCAQEA')
+})
+
+test('a router confidence outside 0..1 or not a number is clamped, so it cannot break the band or the breaker', { options: { apiKey: 'k-test', ceiling: 'sonnet', ceilingBreak: 0.9 } }, async ($, on) => {
+  let confidence: unknown = 2
+  const w = world(on, () => ({ ok: true, status: 200, text: JSON.stringify({ answers: { model: { choice: 'opus', confidence }, effort: { choice: 'high' } } }) }))
+  for (const c of [2, -3, '0.9', null, 'high']) {
+    confidence = c
+    await $.turn.start({ text: 'redesign the queue', turnId: `t${String(c)}` })
+  }
+  expect(w.bodies.length).toBe(5)
+  expect(w.toasts.join()).not.toContain('unavailable')
+  expect(segments('balanced', { turnId: 't', model: 'opus', alias: 'opus', effort: 'high', confidence: 2 } as any).length).toBeGreaterThan(0)
+  expect(segments('balanced', { turnId: 't', model: 'opus', alias: 'opus', effort: 'high', confidence: -1 } as any).length).toBeGreaterThan(0)
+})
+
+test('markers inside a background-task notification are ignored, not saved for the next prompt', OPTS, async ($, on) => {
+  const w = world(on, jev('haiku', 'low'))
+  on('prompt.submit', async (_$, e) => ({ text: e.text }))
+  await $.prompt.submit({ text: '!fable !full build finished', origin: { kind: 'task-notification' } } as any)
+  await $.turn.start({ text: 'build finished', turnId: 'n1' })
+  await $.prompt.submit({ text: 'rename foo to bar' } as any)
+  await $.turn.start({ text: 'rename foo to bar', turnId: 't1' })
+  await step($, 't1')
+
+  expect(w.bodies.length).toBe(1) // the real prompt was routed by the router, not pinned
+  expect(aliasOf(w.steps[0].model)).toBe('haiku')
+})
+
+test('/jev ceiling, floor and preset refuse names that only exist on Object.prototype', { options: { apiKey: 'k-test' } }, async ($, on) => {
+  mock.store(on)
+  world(on, jev('opus', 'high'))
+  for (const cmd of ['ceiling constructor', 'floor __proto__', 'preset constructor', 'preset toString']) {
+    expect(JSON.stringify(await $.command.run({ command: 'jev', args: cmd } as any))).toContain('Usage')
+  }
+})
+
+test('/jev key clear works in any case, and /jev key=<value> stores the key without echoing it', { options: { apiKey: '' } }, async ($, on) => {
+  mock.store(on)
+  world(on, jev('opus', 'high'))
+  const saved = JSON.stringify(await $.command.run({ command: 'jev', args: 'key=ts_live_secretvalue1234' } as any))
+  expect(saved).toContain('saved')
+  expect(saved).not.toContain('secretvalue')
+  expect(JSON.stringify(await $.command.run({ command: 'jev', args: 'key CLEAR' } as any))).toContain('removed')
+  expect(JSON.stringify(await $.command.run({ command: 'jev', args: 'nonsense' } as any))).toContain('Unknown option')
+})
+
+test('redact also catches a JWT whose signature uses + and /, and keeps multi-word quoted JSON values out', () => {
+  expect(redact(jj('eyJhbGciOiJIUzI1NiJ9', '.eyJzdWIiOiIxMjM0NTY3ODkwIn0', '.abc+def/ghi123456'))).toBe('[redacted]')
+  expect(redact('{"password": "my long password"}')).toBe('{"password": "[redacted]"}')
+  expect(redact('密碼是: hunter2abc')).toBe('密碼是: [redacted]')
 })
