@@ -102,7 +102,7 @@ Prompt 標記（只對該 prompt 有效，送給模型前會移除）：`!haiku`
 
 ## 換路由器
 
-預設 TypeSafe Jev。Laya、Kev 這類同樣支援 `/v1/systemone` 介面的自架模型也能用，設定 `router`（`jev`、`laya`、`kev`），或用 `routerUrl` 與 `routerModel` 指向任何相容端點。TypeSafe 金鑰只送到 `api.typesafe.ai`。金鑰只會經由 https 或本機位址送出。
+預設 TypeSafe Jev。Laya、Kev 這類同樣支援 `/v1/systemone` 介面的自架模型也能用，設定 `router`（`jev`、`laya`、`kev`），或用 `routerUrl` 與 `routerModel` 指向任何相容端點。以 `/jev key` 或 `TYPESAFE_API_KEY` 設定的 TypeSafe 金鑰只送到 `api.typesafe.ai`；`apiKey` 外掛選項則會送到你設定的任何端點。金鑰只會經由 https 或本機位址送出。
 
 ## 隱私與安全
 

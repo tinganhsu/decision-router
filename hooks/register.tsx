@@ -292,7 +292,7 @@ const SECRETS: RegExp[] = [
   /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, // Slack
   /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google API keys
-  /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g, // JWTs
+  /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w+/=-]{8,}/g, // JWTs (the signature may be standard base64 as well as base64url)
   /\bnpm_[A-Za-z0-9]{36}\b/g,
   /\bglpat-[\w-]{20,}/g, // GitLab
 ]

@@ -901,3 +901,9 @@ test('/jev key clear works in any case, and /jev key=<value> stores the key with
   expect(JSON.stringify(await $.command.run({ command: 'jev', args: 'key CLEAR' } as any))).toContain('removed')
   expect(JSON.stringify(await $.command.run({ command: 'jev', args: 'nonsense' } as any))).toContain('Unknown option')
 })
+
+test('redact also catches a JWT whose signature uses + and /, and keeps multi-word quoted JSON values out', () => {
+  expect(redact(jj('eyJhbGciOiJIUzI1NiJ9', '.eyJzdWIiOiIxMjM0NTY3ODkwIn0', '.abc+def/ghi123456'))).toBe('[redacted]')
+  expect(redact('{"password": "my long password"}')).toBe('{"password": "[redacted]"}')
+  expect(redact('密碼是: hunter2abc')).toBe('密碼是: [redacted]')
+})
